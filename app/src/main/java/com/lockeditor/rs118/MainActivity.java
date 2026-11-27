@@ -16,6 +16,7 @@ import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -24,19 +25,21 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 public class MainActivity extends Activity implements GridEditorView.Host {
-    private static final int BG = 0xFFF1F3F8, ACC = 0xFF3B5BDB, TXT = 0xFF1B1F29, SUB = 0xFF4A5262;
+    private static final int BG = 0xFFEDF0F7, ACC = 0xFF3B5BDB, TXT = 0xFF1B1F29, SUB = 0xFF5B6475, TRACK = 0xFFE6EAF4;
+    private static final int PAD = 12, GAP = 10, CARD_PAD = 14;
 
     private Config cfg;
     private Limits lim;
     private float d;
     private GridEditorView preview;
     private SnapSync snaps;
-    private TextView gridInfo, widgetInfo;
+    private TextView widgetInfo;
     private boolean built;
     private final Map<String, AppWidgetProviderInfo> infos = new HashMap<>();
     private final Map<String, Drawable> previews = new HashMap<>();
@@ -86,12 +89,9 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     }
 
     private void refreshInfo() {
-        if (gridInfo == null) return;
-        gridInfo.setText("Rows  " + cfg.rows + "\nColumns  " + cfg.cols);
-        StringBuilder sb = new StringBuilder(cfg.widgets.size() + (cfg.widgets.size() == 1 ? " widget" : " widgets"));
-        for (int i = 0; i < Math.min(3, cfg.widgets.size()); i++) sb.append("\n").append(label(cfg.widgets.get(i).provider));
-        if (cfg.widgets.size() > 3) sb.append("\n+").append(cfg.widgets.size() - 3).append(" more");
-        widgetInfo.setText(sb.toString());
+        if (widgetInfo == null) return;
+        int n = cfg.widgets.size();
+        widgetInfo.setText(n + (n == 1 ? " widget" : " widgets"));
     }
 
     // ---------- building blocks ----------
@@ -100,12 +100,6 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         g.setColor(color);
         g.setCornerRadius(dp(radiusDp));
         return g;
-    }
-
-    private void add(LinearLayout parent, View v) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = dp(14);
-        parent.addView(v, lp);
     }
 
     private TextView text(String s, int sizeSp, int color, boolean bold) {
@@ -120,26 +114,35 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     private LinearLayout card(String heading) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(16), dp(14), dp(16), dp(8));
-        c.setBackground(rounded(Color.WHITE, 20));
+        c.setPadding(dp(CARD_PAD), dp(CARD_PAD), dp(CARD_PAD), dp(CARD_PAD - 4));
+        c.setBackground(rounded(Color.WHITE, 24));
+        c.setElevation(d * 1.5f);
         if (heading != null) {
-            TextView h = text(heading, 13, SUB, true);
-            h.setPadding(0, 0, 0, dp(6));
+            TextView h = text(heading.toUpperCase(Locale.ROOT), 11, SUB, true);
+            h.setLetterSpacing(0.08f);
+            h.setPadding(dp(2), 0, 0, dp(8));
             c.addView(h);
         }
         return c;
     }
 
+    /** Adds a card to a column with the gap below it. */
+    private void put(LinearLayout col, View card) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = dp(GAP);
+        col.addView(card, lp);
+    }
+
     private LinearLayout rowBase() {
         LinearLayout r = new LinearLayout(this);
         r.setGravity(Gravity.CENTER_VERTICAL);
-        r.setMinimumHeight(dp(48));
+        r.setMinimumHeight(dp(40));
         return r;
     }
 
     private View switchRow(String label, boolean init, Consumer<Boolean> cb) {
         LinearLayout r = rowBase();
-        TextView t = text(label, 15, TXT, false);
+        TextView t = text(label, 14, TXT, false);
         Switch sw = new Switch(this);
         sw.setThumbTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{ACC, Color.WHITE}));
         sw.setTrackTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{0x883B5BDB, 0xFFC9CED8}));
@@ -152,8 +155,8 @@ public class MainActivity extends Activity implements GridEditorView.Host {
 
     private View tapRow(String label, View.OnClickListener l) {
         LinearLayout r = rowBase();
-        r.addView(text(label, 15, TXT, false), new LinearLayout.LayoutParams(0, -2, 1f));
-        r.addView(text("›", 20, SUB, false));
+        r.addView(text(label, 14, TXT, false), new LinearLayout.LayoutParams(0, -2, 1f));
+        r.addView(text("›", 18, SUB, false));
         r.setOnClickListener(l);
         return r;
     }
@@ -161,30 +164,41 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     private TextView circleBtn(String s, View.OnClickListener l) {
         TextView t = text(s, 20, ACC, true);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(rounded(0xFFE6EAF4, 22));
+        t.setBackground(rounded(TRACK, 20));
         t.setOnClickListener(l);
-        t.setLayoutParams(new LinearLayout.LayoutParams(dp(44), dp(44)));
+        t.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
         return t;
     }
 
-    private View stepperRow(String label, int init, int min, int max, IntConsumer cb) {
+    /** Label on top, [-] value [+] below: fits a half-width card. */
+    private View stepper(String label, int init, int min, int max, IntConsumer cb) {
         final int[] val = {Math.max(min, Math.min(max, init))};
-        LinearLayout r = rowBase();
-        final TextView v = text(String.valueOf(val[0]), 16, TXT, true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, dp(2), 0, dp(6));
+        box.addView(text(label, 12, SUB, false));
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        final TextView v = text(String.valueOf(val[0]), 17, TXT, true);
         v.setGravity(Gravity.CENTER);
-        r.addView(text(label, 15, TXT, false), new LinearLayout.LayoutParams(0, -2, 1f));
         r.addView(circleBtn("−", x -> { if (val[0] > min) { val[0]--; v.setText(String.valueOf(val[0])); cb.accept(val[0]); } }));
-        r.addView(v, new LinearLayout.LayoutParams(dp(44), -2));
+        r.addView(v, new LinearLayout.LayoutParams(0, -2, 1f));
         r.addView(circleBtn("+", x -> { if (val[0] < max) { val[0]++; v.setText(String.valueOf(val[0])); cb.accept(val[0]); } }));
-        return r;
+        box.addView(r);
+        return box;
     }
 
+    /** Label and value on one line, slider below it. */
     private View slider(String label, int init, int min, int max, String unit, IntConsumer cb) {
         int start = Math.max(min, Math.min(max, init));
-        LinearLayout r = rowBase();
-        r.setMinimumHeight(dp(44));
-        final TextView val = text(start + unit, 13, SUB, false);
-        val.setGravity(Gravity.END);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, dp(4), 0, 0);
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        final TextView val = text(start + unit, 12, SUB, false);
+        head.addView(text(label, 13, TXT, false), new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(val);
         SeekBar s = new SeekBar(this);
         s.setMax(max - min);
         s.setProgress(start - min);
@@ -198,10 +212,9 @@ public class MainActivity extends Activity implements GridEditorView.Host {
             @Override public void onStartTrackingTouch(SeekBar sb) { }
             @Override public void onStopTrackingTouch(SeekBar sb) { save(); }
         });
-        r.addView(text(label, 14, TXT, false), new LinearLayout.LayoutParams(dp(92), -2));
-        r.addView(s, new LinearLayout.LayoutParams(0, -2, 1f));
-        r.addView(val, new LinearLayout.LayoutParams(dp(56), -2));
-        return r;
+        box.addView(head);
+        box.addView(s, new LinearLayout.LayoutParams(-1, dp(32)));
+        return box;
     }
 
     // ---------- screen ----------
@@ -211,85 +224,93 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(28), dp(16), dp(16));
+        root.setPadding(dp(PAD), dp(28), dp(PAD), dp(PAD));
         scroll.addView(root);
 
         TextView title = text("Lock Editor", 30, TXT, true);
-        title.setPadding(dp(4), 0, 0, dp(14));
+        title.setPadding(dp(6), 0, 0, dp(14));
         root.addView(title);
 
-        // preview card
-        LinearLayout pc = card(null);
-        pc.setOrientation(LinearLayout.HORIZONTAL);
-        pc.setPadding(dp(16), dp(16), dp(16), dp(16));
+        // two columns; cards inside each column take the height of their content
+        LinearLayout cols = new LinearLayout(this);
+        cols.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout left = new LinearLayout(this), right = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        right.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(0, -2, 1f);
+        llp.rightMargin = dp(GAP / 2);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, -2, 1f);
+        rlp.leftMargin = dp(GAP / 2);
+        cols.addView(left, llp);
+        cols.addView(right, rlp);
+        root.addView(cols);
+
+        // ---- left top: lock screen preview (tap = edit) ----
+        LinearLayout pc = card("Lock screen");
+        DisplayMetrics real = new DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(real);
+        int colW = (getResources().getDisplayMetrics().widthPixels - 2 * dp(PAD) - dp(GAP)) / 2;
+        int innerW = colW - 2 * dp(CARD_PAD);
+        int innerH = Math.round(innerW * (real.heightPixels / (float) Math.max(1, real.widthPixels)));
         preview = new GridEditorView(this);
         preview.setHost(this);
         preview.setLight(true);
         preview.setInteractive(false);
         preview.setMarginDp(0);
-        preview.setCornerDp(18);
+        preview.setCornerDp(16);
         preview.setConfig(cfg);
-        updateAspect();
-        pc.addView(preview, new LinearLayout.LayoutParams(dp(172), dp(372)));
-        LinearLayout side = new LinearLayout(this);
-        side.setOrientation(LinearLayout.VERTICAL);
-        side.setPadding(dp(16), 0, 0, 0);
-        side.addView(text("Grid", 13, SUB, true));
-        gridInfo = text("", 15, TXT, true);
-        gridInfo.setPadding(0, dp(4), 0, dp(16));
-        side.addView(gridInfo);
-        side.addView(text("Widgets", 13, SUB, true));
-        widgetInfo = text("", 14, SUB, false);
-        widgetInfo.setPadding(0, dp(4), 0, 0);
-        side.addView(widgetInfo);
-        pc.addView(side, new LinearLayout.LayoutParams(0, -2, 1f));
-        add(root, pc);
-
-        TextView edit = text("Edit", 16, Color.WHITE, true);
+        FrameLayout wrap = new FrameLayout(this); // preview does not consume touches, so the wrapper gets the tap
+        wrap.addView(preview, new FrameLayout.LayoutParams(-1, -1));
+        wrap.setOnClickListener(v -> startActivity(new Intent(this, EditorActivity.class)));
+        pc.addView(wrap, new LinearLayout.LayoutParams(innerW, innerH));
+        widgetInfo = text("", 12, SUB, false);
+        widgetInfo.setGravity(Gravity.CENTER);
+        widgetInfo.setPadding(0, dp(8), 0, dp(8));
+        pc.addView(widgetInfo, new LinearLayout.LayoutParams(-1, -2));
+        TextView edit = text("Edit layout", 14, Color.WHITE, true);
         edit.setGravity(Gravity.CENTER);
-        edit.setBackground(rounded(ACC, 14));
+        edit.setBackground(rounded(ACC, 18));
         edit.setOnClickListener(v -> startActivity(new Intent(this, EditorActivity.class)));
-        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(-1, dp(52));
-        elp.bottomMargin = dp(14);
-        root.addView(edit, elp);
+        pc.addView(edit, new LinearLayout.LayoutParams(-1, dp(44)));
+        put(left, pc);
 
-        // grid & area
-        LinearLayout gc = card("Grid and area");
-        gc.addView(stepperRow("Rows", cfg.rows, lim.min[Limits.ROWS], lim.max[Limits.ROWS], v -> { cfg.rows = v; cfg.clamp(); save(); }));
-        gc.addView(stepperRow("Columns", cfg.cols, lim.min[Limits.COLS], lim.max[Limits.COLS], v -> { cfg.cols = v; cfg.clamp(); save(); }));
-        gc.addView(slider("Top inset", cfg.insetTop, lim.min[Limits.ITOP], lim.max[Limits.ITOP], "dp", v -> { cfg.insetTop = v; updateAspect(); }));
-        gc.addView(slider("Bottom inset", cfg.insetBottom, lim.min[Limits.IBOT], lim.max[Limits.IBOT], "dp", v -> { cfg.insetBottom = v; updateAspect(); }));
-        add(root, gc);
-
-        // hide stock elements
-        LinearLayout hc = card("Hide stock elements");
-        hc.addView(switchRow("Clock", cfg.hideClock, v -> { cfg.hideClock = v; save(); }));
-        hc.addView(switchRow("Date", cfg.hideDate, v -> { cfg.hideDate = v; save(); }));
-        hc.addView(switchRow("Notifications", cfg.hideNotifs, v -> { cfg.hideNotifs = v; save(); }));
-        hc.addView(switchRow("Bottom shortcuts", cfg.hideShortcuts, v -> { cfg.hideShortcuts = v; save(); }));
-        add(root, hc);
-
-        // notification list
+        // ---- left bottom: notification list ----
         LinearLayout nc = card("Notification list");
         nc.addView(slider("Width", cfg.notifW, lim.min[Limits.NW], lim.max[Limits.NW], "%", v -> cfg.notifW = v));
         nc.addView(slider("Height", cfg.notifH, lim.min[Limits.NH], lim.max[Limits.NH], "%", v -> cfg.notifH = v));
         nc.addView(slider("Left / right", cfg.notifDx, lim.min[Limits.NDX], lim.max[Limits.NDX], "dp", v -> cfg.notifDx = v));
         nc.addView(slider("Up / down", cfg.notifDy, lim.min[Limits.NDY], lim.max[Limits.NDY], "dp", v -> cfg.notifDy = v));
-        nc.addView(tapRow("Reset notification list", v -> {
+        nc.addView(tapRow("Reset", v -> {
             cfg.notifW = 100; cfg.notifH = 100; cfg.notifDx = 0; cfg.notifDy = 0;
             save();
             recreate();
         }));
-        add(root, nc);
+        put(left, nc);
 
-        // tools
+        // ---- right top: grid and area ----
+        LinearLayout gc = card("Grid and area");
+        gc.addView(stepper("Rows", cfg.rows, lim.min[Limits.ROWS], lim.max[Limits.ROWS], v -> { cfg.rows = v; cfg.clamp(); save(); }));
+        gc.addView(stepper("Columns", cfg.cols, lim.min[Limits.COLS], lim.max[Limits.COLS], v -> { cfg.cols = v; cfg.clamp(); save(); }));
+        gc.addView(slider("Top inset", cfg.insetTop, lim.min[Limits.ITOP], lim.max[Limits.ITOP], "dp", v -> { cfg.insetTop = v; updateAspect(); }));
+        gc.addView(slider("Bottom inset", cfg.insetBottom, lim.min[Limits.IBOT], lim.max[Limits.IBOT], "dp", v -> { cfg.insetBottom = v; updateAspect(); }));
+        put(right, gc);
+
+        // ---- right middle: hide stock elements ----
+        LinearLayout hc = card("Hide stock");
+        hc.addView(switchRow("Clock", cfg.hideClock, v -> { cfg.hideClock = v; save(); }));
+        hc.addView(switchRow("Date", cfg.hideDate, v -> { cfg.hideDate = v; save(); }));
+        hc.addView(switchRow("Notifications", cfg.hideNotifs, v -> { cfg.hideNotifs = v; save(); }));
+        hc.addView(switchRow("Shortcuts", cfg.hideShortcuts, v -> { cfg.hideShortcuts = v; save(); }));
+        put(right, hc);
+
+        // ---- right bottom: tools ----
         LinearLayout tc = card("Tools");
         tc.addView(tapRow("Status log", v -> showLog()));
         tc.addView(switchRow("Debug marker", cfg.debug, v -> { cfg.debug = v; save(); }));
         tc.addView(tapRow("Restart SystemUI", v -> runRoot("killall com.android.systemui", "Restarting SystemUI")));
-        tc.addView(tapRow("Grant widget access (root)", v -> runRoot("cmd appwidget grantbind --package com.android.systemui", "Done")));
+        tc.addView(tapRow("Grant widget access", v -> runRoot("cmd appwidget grantbind --package com.android.systemui", "Done")));
         tc.addView(tapRow("Advanced", v -> showAdvanced()));
-        add(root, tc);
+        put(right, tc);
 
         setContentView(scroll);
         built = true;
