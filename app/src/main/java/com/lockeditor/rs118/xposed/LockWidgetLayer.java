@@ -7,6 +7,7 @@ import android.appwidget.AppWidgetProviderInfo;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentSender;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
@@ -17,6 +18,8 @@ import android.widget.FrameLayout;
 
 import com.lockeditor.rs118.Config;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -107,7 +110,17 @@ final class LockWidgetLayer {
 
         for (Config.Widget w : c.widgets) {
             Entry e = entries.get(w.uid);
-            if (e != null) { e.view.setTag(w); continue; }
+            if (e != null) {
+                e.view.setTag(w);
+                w.id = e.id;
+                AppWidgetProviderInfo ci = findInfo(w.provider);
+                if (ci != null && ci.configure != null && !w.configured) {
+                    w.configured = true;
+                    report(w.uid, e.id, true);
+                    launchConfigure(ci, e.id);
+                }
+                continue;
+            }
             try {
                 AppWidgetProviderInfo info = findInfo(w.provider);
                 if (info == null) {
@@ -141,21 +154,35 @@ final class LockWidgetLayer {
                 overlay.addView(hv);
                 entries.put(w.uid, new Entry(w.uid, id, hv));
 
-                if (needCfg) {
-                    try {
-                        ctx.startActivity(new Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
-                                .setComponent(info.configure)
-                                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                    } catch (Throwable t) {
-                        XposedBridge.log(t);
-                    }
-                }
+                if (needCfg) launchConfigure(info, id);
             } catch (Throwable t) {
                 XposedBridge.log(t);
             }
         }
         overlay.requestLayout();
+    }
+
+    /** Launch the widget's setup screen the same way a launcher does (system intent sender). */
+    private void launchConfigure(AppWidgetProviderInfo info, int id) {
+        try {
+            Field f = AppWidgetHost.class.getDeclaredField("sService");
+            f.setAccessible(true);
+            Object svc = f.get(null);
+            Method m = svc.getClass().getMethod("createAppWidgetConfigIntentSender", String.class, int.class, int.class);
+            IntentSender is = (IntentSender) m.invoke(svc, ctx.getPackageName(), id, 0);
+            ctx.startIntentSender(is, null, Intent.FLAG_ACTIVITY_NEW_TASK, Intent.FLAG_ACTIVITY_NEW_TASK, 0);
+            return;
+        } catch (Throwable t) {
+            XposedBridge.log(KeyguardHooks.TAG + "intent sender failed, falling back: " + t);
+        }
+        try {
+            ctx.startActivity(new Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
+                    .setComponent(info.configure)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Throwable t) {
+            XposedBridge.log(t);
+        }
     }
 
     private void report(final String uid, int id, boolean configured) {

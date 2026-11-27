@@ -89,6 +89,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         root.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         root.addView(row(btn("Add widget", v -> pickWidget()), btn("Delete selected", v -> deleteSelected())));
+        root.addView(row(btn("Configure selected", v -> configureSelected()), btn("Reload widgets", v -> ConfigStore.notifyChanged(this))));
         root.addView(row(btn("Grant bind (root)", v -> runRoot(
                         "cmd appwidget grantbind --package com.android.systemui", "Granted", () -> ConfigStore.notifyChanged(this))),
                 btn("Restart SystemUI", v -> runRoot("killall com.android.systemui", "Restarting SystemUI", null))));
@@ -241,6 +242,19 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         cfg.widgets.remove(w);
         editor.setSelected(null);
         save();
+    }
+
+    private void configureSelected() {
+        Config.Widget w = editor.getSelected();
+        if (w == null) { Toast.makeText(this, "Select a widget first", Toast.LENGTH_SHORT).show(); return; }
+        int id = -1;
+        for (Config.Widget f : ConfigStore.load(this).widgets) if (f.uid.equals(w.uid)) id = f.id;
+        if (id <= 0) {
+            Toast.makeText(this, "Widget not bound yet: Grant bind, then Restart SystemUI", Toast.LENGTH_LONG).show();
+            return;
+        }
+        ConfigStore.setRuntime(this, w.uid, id, false); // SystemUI sees "not configured" and launches setup
+        ConfigStore.notifyChanged(this);
     }
 
     private void runRoot(final String cmd, final String okMsg, final Runnable after) {
