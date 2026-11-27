@@ -81,6 +81,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
                 stepper("Cols", cfg.cols, 1, 12, v -> { cfg.cols = v; cfg.clamp(); save(); })));
         root.addView(row(check("Debug marker", cfg.debug, v -> { cfg.debug = v; save(); }),
                 btn("Status log", v -> showLog())));
+        root.addView(btn("Notification size / position", v -> showNotifDialog()));
         root.addView(slider("Top inset", cfg.insetTop, 200, v -> { cfg.insetTop = v; updateAspect(); }));
         root.addView(slider("Bottom inset", cfg.insetBottom, 200, v -> { cfg.insetBottom = v; updateAspect(); }));
 
@@ -244,6 +245,52 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         cfg.widgets.remove(w);
         editor.setSelected(null);
         save();
+    }
+
+    private View rangeSlider(String label, int init, int min, int max, String unit, IntConsumer cb) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        TextView l = new TextView(this);
+        l.setText(label);
+        l.setTextSize(12);
+        final TextView val = new TextView(this);
+        val.setText(init + unit);
+        val.setTextSize(12);
+        SeekBar s = new SeekBar(this);
+        s.setMax(max - min);
+        s.setProgress(init - min);
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int p, boolean user) {
+                val.setText((p + min) + unit);
+                if (user) cb.accept(p + min);
+            }
+            @Override public void onStartTrackingTouch(SeekBar sb) { }
+            @Override public void onStopTrackingTouch(SeekBar sb) { save(); }
+        });
+        r.addView(l, new LinearLayout.LayoutParams(dp(84), -2));
+        r.addView(s, new LinearLayout.LayoutParams(0, -2, 1f));
+        r.addView(val, new LinearLayout.LayoutParams(dp(60), -2));
+        return r;
+    }
+
+    private void showNotifDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        box.addView(rangeSlider("Width", cfg.notifW, 30, 150, "%", v -> cfg.notifW = v));
+        box.addView(rangeSlider("Height", cfg.notifH, 30, 150, "%", v -> cfg.notifH = v));
+        box.addView(rangeSlider("Left / Right", cfg.notifDx, -300, 300, "dp", v -> cfg.notifDx = v));
+        box.addView(rangeSlider("Up / Down", cfg.notifDy, -400, 400, "dp", v -> cfg.notifDy = v));
+        TextView hint = new TextView(this);
+        hint.setTextSize(11);
+        hint.setText("Applies live to the lock screen notification list. Left/Right: negative = left. Up/Down: negative = up.");
+        box.addView(hint);
+        new AlertDialog.Builder(this).setTitle("Notification size / position").setView(box)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Reset", (d2, w) -> {
+                    cfg.notifW = 100; cfg.notifH = 100; cfg.notifDx = 0; cfg.notifDy = 0;
+                    save();
+                }).show();
     }
 
     private void showLog() {

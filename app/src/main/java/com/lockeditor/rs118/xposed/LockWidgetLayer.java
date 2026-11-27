@@ -89,6 +89,7 @@ final class LockWidgetLayer {
         if (overlay.getVisibility() != vis) overlay.setVisibility(vis);
         if (overlay.getAlpha() != a) overlay.setAlpha(a);
         boolean shown = vis == View.VISIBLE && a > 0.05f;
+        KeyguardHooks.applyNotifTransform(sv, shown);
         if (shown != lastShown) {
             lastShown = shown;
             KeyguardHooks.dlog("lock screen " + (shown ? "SHOWN" : "hidden") + " (alpha=" + a + ")");

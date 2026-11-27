@@ -45,6 +45,8 @@ final class KeyguardHooks {
     private static WeakReference<View> lastListenerView = new WeakReference<>(null);
     private static ClassLoader sysuiLoader;
     private static boolean applying, observing;
+    private static WeakReference<View> notifRef = new WeakReference<>(null);
+    private static boolean notifApplied, notifMissingLogged;
     private static long lastRefresh;
 
     private static final String[] SHORTCUT_IDS = {
@@ -239,6 +241,50 @@ final class KeyguardHooks {
     private static boolean isAncestorOrSelf(View anc, View v) {
         for (Object x = v; x instanceof View; x = ((View) x).getParent()) if (x == anc) return true;
         return false;
+    }
+
+    // ---------------- notification list size / position ----------------
+    /** Called every frame from the layer sync. Scales/moves the lock screen notification list. */
+    static void applyNotifTransform(View statusView, boolean shown) {
+        Config c = cfg;
+        boolean custom = c.notifW != 100 || c.notifH != 100 || c.notifDx != 0 || c.notifDy != 0;
+        boolean want = shown && custom;
+        if (!want && !notifApplied) return;
+        View n = notifRef.get();
+        if (n == null || !n.isAttachedToWindow()) {
+            n = null;
+            if (statusView.getParent() instanceof View) {
+                List<View> found = new ArrayList<>();
+                collect((View) statusView.getParent(),
+                        "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout", found);
+                if (!found.isEmpty()) n = found.get(0);
+            }
+            notifRef = new WeakReference<>(n);
+            if (n == null) {
+                if (!notifMissingLogged) {
+                    notifMissingLogged = true;
+                    dlog("notification list view not found (size/position sliders won't work)");
+                }
+                return;
+            }
+        }
+        if (want) {
+            float d = n.getResources().getDisplayMetrics().density;
+            float sx = c.notifW / 100f, sy = c.notifH / 100f, tx = c.notifDx * d, ty = c.notifDy * d;
+            n.setPivotX(n.getWidth() / 2f);
+            n.setPivotY(0f);
+            if (n.getScaleX() != sx) n.setScaleX(sx);
+            if (n.getScaleY() != sy) n.setScaleY(sy);
+            if (n.getTranslationX() != tx) n.setTranslationX(tx);
+            if (n.getTranslationY() != ty) n.setTranslationY(ty);
+            notifApplied = true;
+        } else {
+            n.setScaleX(1f);
+            n.setScaleY(1f);
+            n.setTranslationX(0f);
+            n.setTranslationY(0f);
+            notifApplied = false;
+        }
     }
 
     // ---------------- hide logic ----------------
