@@ -79,6 +79,8 @@ public class MainActivity extends Activity implements GridEditorView.Host {
                 check("Hide shortcuts", cfg.hideShortcuts, v -> { cfg.hideShortcuts = v; save(); })));
         root.addView(row(stepper("Rows", cfg.rows, 1, 24, v -> { cfg.rows = v; cfg.clamp(); save(); }),
                 stepper("Cols", cfg.cols, 1, 12, v -> { cfg.cols = v; cfg.clamp(); save(); })));
+        root.addView(row(check("Debug marker", cfg.debug, v -> { cfg.debug = v; save(); }),
+                btn("Status log", v -> showLog())));
         root.addView(slider("Top inset", cfg.insetTop, 200, v -> { cfg.insetTop = v; updateAspect(); }));
         root.addView(slider("Bottom inset", cfg.insetBottom, 200, v -> { cfg.insetBottom = v; updateAspect(); }));
 
@@ -244,6 +246,23 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         save();
     }
 
+    private void showLog() {
+        String log = ConfigStore.readLog(this);
+        if (log.isEmpty()) log = "(empty)\n\nThe SystemUI hook has not reported anything.\n"
+                + "Check: module enabled in LSPosed with scope System UI, SystemUI restarted, then lock and unlock once.";
+        TextView t = new TextView(this);
+        t.setText(log);
+        t.setTextSize(11);
+        t.setTextIsSelectable(true);
+        t.setPadding(dp(12), dp(8), dp(12), dp(8));
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(t);
+        new AlertDialog.Builder(this).setTitle("SystemUI status").setView(sv)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Clear", (d2, w) -> ConfigStore.clearLog(this))
+                .show();
+    }
+
     private void configureSelected() {
         Config.Widget w = editor.getSelected();
         if (w == null) { Toast.makeText(this, "Select a widget first", Toast.LENGTH_SHORT).show(); return; }
@@ -261,9 +280,8 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         new Thread(() -> {
             String msg;
             try {
-                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-                int rc = p.waitFor();
-                msg = rc == 0 ? okMsg : "Command failed (exit " + rc + ")";
+                boolean ok = cmd.startsWith("cmd appwidget grantbind") ? RootUtil.grantBind() : RootUtil.run(cmd);
+                msg = ok ? okMsg : "Root command failed (is root granted to Lock Editor?)";
             } catch (Exception ex) {
                 msg = "Root unavailable: " + ex.getMessage();
             }

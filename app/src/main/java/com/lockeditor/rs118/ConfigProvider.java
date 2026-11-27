@@ -8,9 +8,11 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Process;
+import android.os.SystemClock;
 
-/** Lets SystemUI (only) pull the config and report allocated widget ids. */
+/** Lets SystemUI (only) pull the config, report widget ids and diagnostics. */
 public class ConfigProvider extends ContentProvider {
+    private static long lastGrant;
 
     private boolean allowed() {
         int uid = Binder.getCallingUid();
@@ -20,10 +22,17 @@ public class ConfigProvider extends ContentProvider {
         return false;
     }
 
+    private static synchronized boolean grantDue() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastGrant < 30000) return false;
+        lastGrant = now;
+        return true;
+    }
+
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         if (!allowed()) return null;
-        Context c = getContext();
+        final Context c = getContext();
         Bundle out = new Bundle();
         if ("get".equals(method)) {
             Config cfg = ConfigStore.load(c);
@@ -31,6 +40,17 @@ public class ConfigProvider extends ContentProvider {
             out.putString("json", cfg.toJson(true).toString());
         } else if ("set_id".equals(method) && extras != null) {
             ConfigStore.setRuntime(c, arg, extras.getInt("id", -1), extras.getBoolean("configured"));
+        } else if ("log".equals(method)) {
+            ConfigStore.appendLog(c, arg);
+        } else if ("bind_denied".equals(method) && grantDue()) {
+            // SystemUI says it may not bind widgets: grant it via root, then make it retry
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    boolean ok = RootUtil.grantBind();
+                    ConfigStore.appendLog(c, "auto grantbind -> " + (ok ? "OK" : "FAILED (root not granted to Lock Editor?)"));
+                    ConfigStore.notifyChanged(c);
+                }
+            }).start();
         }
         return out;
     }

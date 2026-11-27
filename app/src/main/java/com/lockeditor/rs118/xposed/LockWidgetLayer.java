@@ -8,6 +8,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentSender;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
@@ -39,6 +41,7 @@ final class LockWidgetLayer {
     private final AppWidgetHost host;
     private final AppWidgetManager mgr;
     private final Map<String, Entry> entries = new HashMap<>();
+    private boolean lastShown;
 
     private static final class Entry {
         final String uid;
@@ -56,22 +59,41 @@ final class LockWidgetLayer {
         overlay = new Overlay(viewCtx);
         try {
             host.startListening();
+            KeyguardHooks.dlog("widget host started");
         } catch (Throwable t) {
-            XposedBridge.log(t);
+            KeyguardHooks.dlog("host.startListening failed: " + t);
         }
     }
 
     /** Adds the overlay next to the keyguard status view (same parent, drawn on top). */
     void attachTo(ViewGroup statusView) {
         ViewParent p = statusView.getParent();
-        if (!(p instanceof ViewGroup)) return;
+        if (!(p instanceof ViewGroup)) {
+            KeyguardHooks.dlog("status view has no ViewGroup parent, cannot attach layer");
+            return;
+        }
         ViewGroup parent = (ViewGroup) p;
         if (overlay.getParent() != parent) {
             if (overlay.getParent() instanceof ViewGroup) ((ViewGroup) overlay.getParent()).removeView(overlay);
             parent.addView(overlay, new ViewGroup.LayoutParams(-1, -1));
+            KeyguardHooks.dlog("layer attached to " + parent.getClass().getName() + " ("
+                    + parent.getWidth() + "x" + parent.getHeight() + ", children=" + parent.getChildCount() + ")");
         }
-        overlay.setVisibility(statusView.getVisibility());
-        overlay.setAlpha(statusView.getAlpha());
+        sync(statusView);
+    }
+
+    /** Called every frame: layer follows the keyguard status view. */
+    void sync(View sv) {
+        int vis = sv.getVisibility();
+        float a = sv.getAlpha();
+        if (overlay.getVisibility() != vis) overlay.setVisibility(vis);
+        if (overlay.getAlpha() != a) overlay.setAlpha(a);
+        boolean shown = vis == View.VISIBLE && a > 0.05f;
+        if (shown != lastShown) {
+            lastShown = shown;
+            KeyguardHooks.dlog("lock screen " + (shown ? "SHOWN" : "hidden") + " (alpha=" + a + ")");
+            if (shown) KeyguardHooks.maybeRefresh(sv.getContext());
+        }
     }
 
     boolean owns(View v) {
@@ -92,6 +114,7 @@ final class LockWidgetLayer {
     }
 
     void update(Config c) {
+        KeyguardHooks.dlog("config loaded: " + c.widgets.size() + " widget(s), grid " + c.rows + "x" + c.cols);
         overlay.setConfig(c);
         for (int oid : c.orphans) {
             try { host.deleteAppWidgetId(oid); } catch (Throwable ignored) { }
@@ -124,7 +147,7 @@ final class LockWidgetLayer {
             try {
                 AppWidgetProviderInfo info = findInfo(w.provider);
                 if (info == null) {
-                    XposedBridge.log(KeyguardHooks.TAG + "provider not installed: " + w.provider);
+                    KeyguardHooks.dlog("provider not installed/visible: " + w.provider);
                     continue;
                 }
                 int id = w.id;
@@ -132,13 +155,14 @@ final class LockWidgetLayer {
                 if (id <= 0 || mgr.getAppWidgetInfo(id) == null) {
                     id = host.allocateAppWidgetId();
                     boolean ok = false;
-                    try { ok = mgr.bindAppWidgetIdIfAllowed(id, info.provider); } catch (Throwable t) { XposedBridge.log(t); }
+                    try { ok = mgr.bindAppWidgetIdIfAllowed(id, info.provider); } catch (Throwable t) { KeyguardHooks.dlog("bind threw: " + t); }
                     if (!ok) {
                         try { host.deleteAppWidgetId(id); } catch (Throwable ignored) { }
-                        XposedBridge.log(KeyguardHooks.TAG + "bind denied for " + w.provider
-                                + " (run: cmd appwidget grantbind --package com.android.systemui)");
+                        KeyguardHooks.dlog("BIND DENIED for " + w.provider + " - asking Lock Editor to grant permission via root");
+                        requestGrant();
                         continue;
                     }
+                    KeyguardHooks.dlog("bound " + w.provider + " as id " + id);
                     fresh = true;
                     w.configured = false;
                 }
@@ -153,13 +177,22 @@ final class LockWidgetLayer {
                 hv.setTag(w);
                 overlay.addView(hv);
                 entries.put(w.uid, new Entry(w.uid, id, hv));
+                KeyguardHooks.dlog("widget view created (id " + id + ", cell " + w.col + "," + w.row + " span " + w.colSpan + "x" + w.rowSpan + ")");
 
                 if (needCfg) launchConfigure(info, id);
             } catch (Throwable t) {
-                XposedBridge.log(t);
+                KeyguardHooks.dlog("widget setup failed: " + t);
             }
         }
         overlay.requestLayout();
+    }
+
+    private void requestGrant() {
+        KeyguardHooks.IO.execute(new Runnable() {
+            @Override public void run() {
+                try { ctx.getContentResolver().call(URI, "bind_denied", null, null); } catch (Throwable ignored) { }
+            }
+        });
     }
 
     /** Launch the widget's setup screen the same way a launcher does (system intent sender). */
@@ -171,9 +204,10 @@ final class LockWidgetLayer {
             Method m = svc.getClass().getMethod("createAppWidgetConfigIntentSender", String.class, int.class, int.class);
             IntentSender is = (IntentSender) m.invoke(svc, ctx.getPackageName(), id, 0);
             ctx.startIntentSender(is, null, Intent.FLAG_ACTIVITY_NEW_TASK, Intent.FLAG_ACTIVITY_NEW_TASK, 0);
+            KeyguardHooks.dlog("launched widget setup screen for id " + id);
             return;
         } catch (Throwable t) {
-            XposedBridge.log(KeyguardHooks.TAG + "intent sender failed, falling back: " + t);
+            KeyguardHooks.dlog("intent sender failed, falling back: " + t);
         }
         try {
             ctx.startActivity(new Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
@@ -181,7 +215,7 @@ final class LockWidgetLayer {
                     .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Throwable t) {
-            XposedBridge.log(t);
+            KeyguardHooks.dlog("could not launch setup screen: " + t);
         }
     }
 
@@ -203,15 +237,21 @@ final class LockWidgetLayer {
     /** Full-size layer; children are placed on the rows x cols grid taken from their Widget tag. */
     static final class Overlay extends FrameLayout {
         private Config cfg;
+        private boolean loggedLayout;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Map<View, int[]> lastSize = new WeakHashMap<>();
 
-        Overlay(Context c) { super(c); }
+        Overlay(Context c) {
+            super(c);
+            setWillNotDraw(false);
+        }
 
         void setConfig(Config c) {
             cfg = c;
             float d = getResources().getDisplayMetrics().density;
             setPadding(0, Math.round(c.insetTop * d), 0, Math.round(c.insetBottom * d));
             requestLayout();
+            invalidate();
         }
 
         private Rect cell(View c, int iw, int ih) {
@@ -238,6 +278,10 @@ final class LockWidgetLayer {
 
         @Override
         protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            if (!loggedLayout && r - l > 0 && b - t > 0) {
+                loggedLayout = true;
+                KeyguardHooks.dlog("layer laid out " + (r - l) + "x" + (b - t) + " children=" + getChildCount());
+            }
             int pl = getPaddingLeft(), pt = getPaddingTop();
             int iw = r - l - pl - getPaddingRight(), ih = b - t - pt - getPaddingBottom();
             float d = getResources().getDisplayMetrics().density;
@@ -256,6 +300,21 @@ final class LockWidgetLayer {
                         } catch (Throwable ignored) { }
                     }
                 }
+            }
+        }
+
+        @Override
+        protected void dispatchDraw(Canvas canvas) {
+            super.dispatchDraw(canvas);
+            if (cfg != null && cfg.debug) {
+                float d = getResources().getDisplayMetrics().density;
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(3 * d);
+                paint.setColor(0xFFFF00FF);
+                canvas.drawRect(2 * d, getPaddingTop() + 2 * d, getWidth() - 2 * d, getHeight() - getPaddingBottom() - 2 * d, paint);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setTextSize(14 * d);
+                canvas.drawText("Lock Editor layer - " + cfg.widgets.size() + " widget(s)", 10 * d, getPaddingTop() + 22 * d, paint);
             }
         }
     }

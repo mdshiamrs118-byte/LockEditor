@@ -13,7 +13,7 @@ public class Config {
     public static final String URI = "content://" + AUTHORITY + "/config";
 
     public int rows = 8, cols = 4;
-    public boolean hideClock, hideDate, hideNotifs, hideShortcuts;
+    public boolean hideClock, hideDate, hideNotifs, hideShortcuts, debug;
     public int insetTop, insetBottom; // dp, shrinks the widget area
     public final List<Widget> widgets = new ArrayList<>();
     public final List<Integer> orphans = new ArrayList<>(); // widget ids SystemUI should free
@@ -54,7 +54,7 @@ public class Config {
             o.put("rows", rows).put("cols", cols)
                     .put("hideClock", hideClock).put("hideDate", hideDate)
                     .put("hideNotifs", hideNotifs).put("hideShortcuts", hideShortcuts)
-                    .put("insetTop", insetTop).put("insetBottom", insetBottom);
+                    .put("debug", debug).put("insetTop", insetTop).put("insetBottom", insetBottom);
             JSONArray a = new JSONArray();
             for (Widget w : widgets) {
                 JSONObject j = new JSONObject();
@@ -83,6 +83,7 @@ public class Config {
             c.hideDate = o.optBoolean("hideDate");
             c.hideNotifs = o.optBoolean("hideNotifs");
             c.hideShortcuts = o.optBoolean("hideShortcuts");
+            c.debug = o.optBoolean("debug");
             c.insetTop = o.optInt("insetTop");
             c.insetBottom = o.optInt("insetBottom");
             JSONArray a = o.optJSONArray("widgets");

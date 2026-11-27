@@ -7,10 +7,13 @@ import android.net.Uri;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /** Module-side storage. Layout is written by the editor; runtime ids are written by SystemUI via the provider. */
@@ -85,5 +88,25 @@ public final class ConfigStore {
             prefs(c).edit().putString("runtime", rt.toString()).apply();
         }
         return ids;
+    }
+
+    // ---- diagnostics written by the SystemUI hook ----
+    public static synchronized void appendLog(Context c, String line) {
+        if (line == null) return;
+        String ts = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+        String old = prefs(c).getString("log", "");
+        String[] ls = old.isEmpty() ? new String[0] : old.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (int i = Math.max(0, ls.length - 59); i < ls.length; i++) sb.append(ls[i]).append('\n');
+        sb.append(ts).append("  ").append(line);
+        prefs(c).edit().putString("log", sb.toString()).apply();
+    }
+
+    public static synchronized String readLog(Context c) {
+        return prefs(c).getString("log", "");
+    }
+
+    public static synchronized void clearLog(Context c) {
+        prefs(c).edit().remove("log").apply();
     }
 }
