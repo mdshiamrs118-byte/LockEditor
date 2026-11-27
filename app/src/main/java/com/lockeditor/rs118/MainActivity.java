@@ -63,6 +63,8 @@ public class MainActivity extends Activity implements GridEditorView.Host {
             refreshInfo();
         }
         snaps.start();
+        // re-read on every resume: picks up a changed wallpaper
+        WallpaperLoader.load(this, bmp -> { if (bmp != null && preview != null) preview.setWallpaper(bmp); });
     }
 
     @Override
@@ -80,10 +82,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     }
 
     private void updateAspect() {
-        DisplayMetrics m = new DisplayMetrics();
-        getWindowManager().getDefaultDisplay().getRealMetrics(m);
-        float h = m.heightPixels - (cfg.insetTop + cfg.insetBottom) * m.density;
-        if (preview != null) preview.setAspect(m.widthPixels / Math.max(h, 1f));
+        if (preview != null) preview.invalidate(); // insets changed: the grid area is recomputed on draw
     }
 
     private void refreshInfo() {
@@ -228,9 +227,10 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         preview.setLight(true);
         preview.setInteractive(false);
         preview.setMarginDp(0);
+        preview.setCornerDp(18);
         preview.setConfig(cfg);
         updateAspect();
-        pc.addView(preview, new LinearLayout.LayoutParams(dp(150), dp(280)));
+        pc.addView(preview, new LinearLayout.LayoutParams(dp(172), dp(372)));
         LinearLayout side = new LinearLayout(this);
         side.setOrientation(LinearLayout.VERTICAL);
         side.setPadding(dp(16), 0, 0, 0);
@@ -294,7 +294,6 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         setContentView(scroll);
         built = true;
         refreshInfo();
-        WallpaperLoader.load(this, bmp -> { if (bmp != null && preview != null) preview.setWallpaper(bmp); });
     }
 
     // ---------- dialogs ----------

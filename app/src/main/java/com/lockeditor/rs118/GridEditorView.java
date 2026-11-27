@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.util.DisplayMetrics;
@@ -24,7 +25,9 @@ public class GridEditorView extends View {
 
     private static final int NONE = 0, MOVE = 1, RESIZE = 2;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF area = new RectF();
+    private final RectF area = new RectF();   // widget grid area (screen minus top/bottom inset)
+    private final RectF screen = new RectF(); // the whole phone screen, same aspect as the real display
+    private float cornerDp;
     private final DisplayMetrics real = new DisplayMetrics();
     private final float dp;
     private Config cfg = new Config();
@@ -32,7 +35,7 @@ public class GridEditorView extends View {
     private Config.Widget sel;
     private Bitmap wallpaper;
     private boolean light, interactive = true;
-    private float marginDp = 8, aspect = 0.5f;
+    private float marginDp = 8;
     private int mode;
     private float downX, downY;
     private int oRow, oCol, oRs, oCs;
@@ -53,7 +56,7 @@ public class GridEditorView extends View {
 
     public void setHost(Host h) { host = h; }
     public void setConfig(Config c) { cfg = c; sel = null; invalidate(); }
-    public void setAspect(float a) { aspect = a; invalidate(); }
+    public void setCornerDp(float c) { cornerDp = c; invalidate(); }
     public void setLight(boolean l) { light = l; invalidate(); }
     public void setInteractive(boolean i) { interactive = i; }
     public void setMarginDp(float m) { marginDp = m; invalidate(); }
@@ -63,10 +66,15 @@ public class GridEditorView extends View {
 
     private void computeArea() {
         float m = marginDp * dp;
-        float aw = getWidth() - 2 * m, ah = getHeight() - 2 * m, w, h;
-        if (aw / ah > aspect) { h = ah; w = h * aspect; } else { w = aw; h = w / aspect; }
+        float aw = Math.max(1, getWidth() - 2 * m), ah = Math.max(1, getHeight() - 2 * m), w, h;
+        float sa = real.widthPixels / (float) Math.max(1, real.heightPixels); // real screen aspect
+        if (aw / ah > sa) { h = ah; w = h * sa; } else { w = aw; h = w / sa; }
         float l = (getWidth() - w) / 2f, t = (getHeight() - h) / 2f;
-        area.set(l, t, l + w, t + h);
+        screen.set(l, t, l + w, t + h);
+        float s = w / Math.max(1, real.widthPixels); // preview px per real px
+        float top = screen.top + cfg.insetTop * real.density * s;
+        float bottom = screen.bottom - cfg.insetBottom * real.density * s;
+        area.set(screen.left, top, screen.right, Math.max(bottom, top + 1));
     }
 
     private RectF rectOf(Config.Widget w) {
@@ -75,38 +83,46 @@ public class GridEditorView extends View {
                 area.left + (w.col + w.colSpan) * cw, area.top + (w.row + w.rowSpan) * ch);
     }
 
+    /** Same as the lock screen: scale to cover the whole screen, centered. No extra dimming. */
     private void drawWallpaper(Canvas c) {
-        float s = area.width() / Math.max(1, real.widthPixels);
-        RectF full = new RectF(area.left, area.top - cfg.insetTop * real.density * s,
-                area.right, area.bottom + cfg.insetBottom * real.density * s);
         float bw = wallpaper.getWidth(), bh = wallpaper.getHeight();
-        float sc = Math.max(full.width() / bw, full.height() / bh);
+        float sc = Math.max(screen.width() / bw, screen.height() / bh);
         float dw = bw * sc, dh = bh * sc;
-        RectF dst = new RectF(full.centerX() - dw / 2, full.centerY() - dh / 2, full.centerX() + dw / 2, full.centerY() + dh / 2);
-        c.save();
-        c.clipRect(area);
+        RectF dst = new RectF(screen.centerX() - dw / 2, screen.centerY() - dh / 2,
+                screen.centerX() + dw / 2, screen.centerY() + dh / 2);
         c.drawBitmap(wallpaper, null, dst, paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0x44000000);
-        c.drawRect(area, paint);
-        c.restore();
     }
 
     @Override
     protected void onDraw(Canvas c) {
         computeArea();
         float rad = 6 * dp;
+        float corner = cornerDp * dp;
+        c.save();
+        if (corner > 0) {
+            Path clip = new Path();
+            clip.addRoundRect(screen, corner, corner, Path.Direction.CW);
+            c.clipPath(clip);
+        }
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(light ? 0xFFE6EAF4 : 0xFF303134);
-        c.drawRect(area, paint);
+        c.drawRect(screen, paint);
         if (wallpaper != null) drawWallpaper(c);
 
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(1f);
-        paint.setColor(wallpaper != null ? 0x40FFFFFF : (light ? 0x22000000 : 0x55FFFFFF));
         float cw = area.width() / cfg.cols, ch = area.height() / cfg.rows;
-        for (int i = 0; i <= cfg.cols; i++) c.drawLine(area.left + i * cw, area.top, area.left + i * cw, area.bottom, paint);
-        for (int i = 0; i <= cfg.rows; i++) c.drawLine(area.left, area.top + i * ch, area.right, area.top + i * ch, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        for (int pass = 0; pass < 2; pass++) {
+            if (wallpaper != null) { // dark underlay so the grid shows on light wallpapers too
+                paint.setStrokeWidth(pass == 0 ? 2f : 1f);
+                paint.setColor(pass == 0 ? 0x33000000 : 0x66FFFFFF);
+            } else {
+                if (pass == 0) continue;
+                paint.setStrokeWidth(1f);
+                paint.setColor(light ? 0x22000000 : 0x55FFFFFF);
+            }
+            for (int i = 0; i <= cfg.cols; i++) c.drawLine(area.left + i * cw, area.top, area.left + i * cw, area.bottom, paint);
+            for (int i = 0; i <= cfg.rows; i++) c.drawLine(area.left, area.top + i * ch, area.right, area.top + i * ch, paint);
+        }
 
         for (Config.Widget w : cfg.widgets) {
             RectF r = rectOf(w);
@@ -164,6 +180,13 @@ public class GridEditorView extends View {
                 paint.setColor(accent);
                 c.drawRoundRect(new RectF(r.right - 14 * dp, r.bottom - 14 * dp, r.right, r.bottom), 3 * dp, 3 * dp, paint);
             }
+        }
+        c.restore();
+        if (corner > 0 && light) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(1.5f * dp);
+            paint.setColor(0x33000000);
+            c.drawRoundRect(screen, corner, corner, paint);
         }
     }
 

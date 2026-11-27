@@ -48,6 +48,9 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        // draw under the camera cutout so the editor matches the real screen geometry
+        getWindow().getAttributes().layoutInDisplayCutoutMode =
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         d = getResources().getDisplayMetrics().density;
         cfg = ConfigStore.load(this);
         for (AppWidgetProviderInfo i : AppWidgetManager.getInstance(this).getInstalledProviders())
@@ -61,10 +64,6 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         snaps = new SnapSync(this, 2500, () -> editor.invalidate());
         editor.setMarginDp(0);
         editor.setConfig(cfg);
-        DisplayMetrics m = new DisplayMetrics();
-        getWindowManager().getDefaultDisplay().getRealMetrics(m);
-        float h = m.heightPixels - (cfg.insetTop + cfg.insetBottom) * m.density;
-        editor.setAspect(m.widthPixels / Math.max(h, 1f));
         root.addView(editor, new FrameLayout.LayoutParams(-1, -1));
 
         // top bar
@@ -118,10 +117,15 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
 
         setContentView(root);
         immersive();
-        WallpaperLoader.load(this, bmp -> { if (bmp != null) editor.setWallpaper(bmp); });
     }
 
-    @Override protected void onResume() { super.onResume(); snaps.start(); }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        snaps.start();
+        // re-read on every resume: picks up a changed wallpaper
+        WallpaperLoader.load(this, bmp -> { if (bmp != null) editor.setWallpaper(bmp); });
+    }
     @Override protected void onPause() { snaps.stop(); super.onPause(); }
 
     @Override
