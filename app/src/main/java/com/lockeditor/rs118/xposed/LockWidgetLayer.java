@@ -158,7 +158,7 @@ final class LockWidgetLayer {
                     try { ok = mgr.bindAppWidgetIdIfAllowed(id, info.provider); } catch (Throwable t) { KeyguardHooks.dlog("bind threw: " + t); }
                     if (!ok) {
                         try { host.deleteAppWidgetId(id); } catch (Throwable ignored) { }
-                        KeyguardHooks.dlog("BIND DENIED for " + w.provider + " - asking Lock Editor to grant permission via root");
+                        KeyguardHooks.dlog("BIND DENIED for " + w.provider + " - enable the System Framework scope for Lock Editor in LSPosed, then reboot");
                         requestGrant();
                         continue;
                     }
