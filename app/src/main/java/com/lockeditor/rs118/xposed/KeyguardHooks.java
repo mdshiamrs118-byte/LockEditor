@@ -328,7 +328,15 @@ final class KeyguardHooks {
         if (observing) return;
         observing = true;
         ctx.getContentResolver().registerContentObserver(URI, true, new ContentObserver(MAIN) {
-            @Override public void onChange(boolean selfChange) { refresh(ctx); }
+            @Override public void onChange(boolean selfChange) { onChange(selfChange, null); }
+            @Override public void onChange(boolean selfChange, Uri uri) {
+                if (uri != null && "snap".equals(uri.getLastPathSegment())) {
+                    LockWidgetLayer l = layer;
+                    if (l != null) l.scheduleSnapshot(100);   // editor/preview asked for fresh renders
+                } else {
+                    refresh(ctx);
+                }
+            }
         });
     }
 

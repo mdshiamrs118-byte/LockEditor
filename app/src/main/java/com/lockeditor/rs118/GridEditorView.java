@@ -17,6 +17,7 @@ public class GridEditorView extends View {
     public interface Host {
         Drawable preview(String provider);
         String label(String provider);
+        Bitmap snapshot(String uid);
         void onChanged();
         void onSelected(Config.Widget w);
     }
@@ -102,7 +103,7 @@ public class GridEditorView extends View {
 
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(1f);
-        paint.setColor(light ? 0x22000000 : (wallpaper != null ? 0x40FFFFFF : 0x55FFFFFF));
+        paint.setColor(wallpaper != null ? 0x40FFFFFF : (light ? 0x22000000 : 0x55FFFFFF));
         float cw = area.width() / cfg.cols, ch = area.height() / cfg.rows;
         for (int i = 0; i <= cfg.cols; i++) c.drawLine(area.left + i * cw, area.top, area.left + i * cw, area.bottom, paint);
         for (int i = 0; i <= cfg.rows; i++) c.drawLine(area.left, area.top + i * ch, area.right, area.top + i * ch, paint);
@@ -111,41 +112,55 @@ public class GridEditorView extends View {
             RectF r = rectOf(w);
             r.inset(2 * dp, 2 * dp);
             boolean s = w == sel;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(light ? (s ? 0xAA8FA6F5 : 0x88B4C4F8) : (s ? 0x99448AFF : 0x66448AFF));
-            c.drawRoundRect(r, rad, rad, paint);
+            Bitmap shot = host != null ? host.snapshot(w.uid) : null;
 
-            Drawable dr = host != null ? host.preview(w.provider) : null;
-            if (dr != null) {
-                int iw = dr.getIntrinsicWidth(), ih = dr.getIntrinsicHeight();
-                if (iw > 0 && ih > 0) {
-                    float k = Math.min(r.width() / iw, r.height() / ih);
-                    float pw = iw * k, ph = ih * k;
-                    dr.setBounds((int) (r.centerX() - pw / 2), (int) (r.centerY() - ph / 2),
-                            (int) (r.centerX() + pw / 2), (int) (r.centerY() + ph / 2));
-                    dr.setAlpha(190);
-                    dr.draw(c);
+            if (shot != null) {
+                // the real, loaded widget as rendered by SystemUI
+                float k = Math.min(r.width() / shot.getWidth(), r.height() / shot.getHeight());
+                float pw = shot.getWidth() * k, ph = shot.getHeight() * k;
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(0xFFFFFFFF); // full alpha so the bitmap is not tinted/faded
+                c.drawBitmap(shot, null, new RectF(r.centerX() - pw / 2, r.centerY() - ph / 2,
+                        r.centerX() + pw / 2, r.centerY() + ph / 2), paint);
+            } else {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(light ? (s ? 0xAA8FA6F5 : 0x88B4C4F8) : (s ? 0x99448AFF : 0x66448AFF));
+                c.drawRoundRect(r, rad, rad, paint);
+                Drawable dr = host != null ? host.preview(w.provider) : null;
+                if (dr != null) {
+                    int iw = dr.getIntrinsicWidth(), ih = dr.getIntrinsicHeight();
+                    if (iw > 0 && ih > 0) {
+                        float k = Math.min(r.width() / iw, r.height() / ih);
+                        float pw = iw * k, ph = ih * k;
+                        dr.setBounds((int) (r.centerX() - pw / 2), (int) (r.centerY() - ph / 2),
+                                (int) (r.centerX() + pw / 2), (int) (r.centerY() + ph / 2));
+                        dr.setAlpha(190);
+                        dr.draw(c);
+                    }
                 }
             }
 
             int accent = light ? (s ? 0xFF3B5BDB : 0xFF8A97C7) : (s ? 0xFF8AB4F8 : 0xFF9AA0A6);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth((s ? 3 : 1.5f) * dp);
+            paint.setStrokeWidth((s ? 3 : (shot != null ? 1 : 1.5f)) * dp);
             paint.setColor(accent);
             c.drawRoundRect(r, rad, rad, paint);
 
-            c.save();
-            c.clipRect(r);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(light ? 0xFF1B1F29 : 0xFFFFFFFF);
-            if (!light) paint.setShadowLayer(2 * dp, 0, 0, 0xFF000000);
-            String label = host != null ? host.label(w.provider) : w.provider;
-            paint.setTextSize((light ? 9 : 12) * dp);
-            c.drawText(label + (light ? "" : "  " + w.colSpan + "×" + w.rowSpan), r.left + 4 * dp, r.top + (light ? 11 : 14) * dp, paint);
-            paint.clearShadowLayer();
-            c.restore();
+            if (shot == null) { // name label only while there is no real render
+                c.save();
+                c.clipRect(r);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(light ? 0xFF1B1F29 : 0xFFFFFFFF);
+                if (!light) paint.setShadowLayer(2 * dp, 0, 0, 0xFF000000);
+                String label = host != null ? host.label(w.provider) : w.provider;
+                paint.setTextSize((light ? 9 : 12) * dp);
+                c.drawText(label + (light ? "" : "  " + w.colSpan + "×" + w.rowSpan), r.left + 4 * dp, r.top + (light ? 11 : 14) * dp, paint);
+                paint.clearShadowLayer();
+                c.restore();
+            }
 
             if (s && interactive) {
+                paint.setStyle(Paint.Style.FILL);
                 paint.setColor(accent);
                 c.drawRoundRect(new RectF(r.right - 14 * dp, r.bottom - 14 * dp, r.right, r.bottom), 3 * dp, 3 * dp, paint);
             }

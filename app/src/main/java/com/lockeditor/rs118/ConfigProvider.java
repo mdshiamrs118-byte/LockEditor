@@ -7,10 +7,15 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.SystemClock;
 
-/** Lets SystemUI (only) pull the config, report widget ids and diagnostics. */
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.util.List;
+
+/** Lets SystemUI (only) pull the config, report widget ids and diagnostics, and write widget snapshots. */
 public class ConfigProvider extends ContentProvider {
     private static long lastGrant;
 
@@ -42,6 +47,8 @@ public class ConfigProvider extends ContentProvider {
             ConfigStore.setRuntime(c, arg, extras.getInt("id", -1), extras.getBoolean("configured"));
         } else if ("log".equals(method)) {
             ConfigStore.appendLog(c, arg);
+        } else if ("snap_done".equals(method)) {
+            ConfigStore.notifySnapDone(c);
         } else if ("bind_denied".equals(method) && grantDue()) {
             // SystemUI says it may not bind widgets: grant it via root, then make it retry
             new Thread(new Runnable() {
@@ -53,6 +60,19 @@ public class ConfigProvider extends ContentProvider {
             }).start();
         }
         return out;
+    }
+
+    /** SystemUI (only) writes widget snapshots through here. */
+    @Override
+    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+        if (!allowed()) throw new SecurityException("not allowed");
+        List<String> seg = uri.getPathSegments();
+        if (seg.size() == 2 && "snapfile".equals(seg.get(0)) && seg.get(1).matches("[A-Za-z0-9-]{1,64}")) {
+            File f = new File(ConfigStore.snapDir(getContext()), seg.get(1) + ".png");
+            return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_WRITE_ONLY
+                    | ParcelFileDescriptor.MODE_CREATE | ParcelFileDescriptor.MODE_TRUNCATE);
+        }
+        throw new FileNotFoundException(uri.toString());
     }
 
     @Override public boolean onCreate() { return true; }

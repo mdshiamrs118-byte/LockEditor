@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
 import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -34,6 +35,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     private Limits lim;
     private float d;
     private GridEditorView preview;
+    private SnapSync snaps;
     private TextView gridInfo, widgetInfo;
     private boolean built;
     private final Map<String, AppWidgetProviderInfo> infos = new HashMap<>();
@@ -48,6 +50,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         lim = Limits.load(this);
         for (AppWidgetProviderInfo i : AppWidgetManager.getInstance(this).getInstalledProviders())
             infos.put(i.provider.flattenToString(), i);
+        snaps = new SnapSync(this, 4000, () -> { if (preview != null) preview.invalidate(); });
         buildUi();
     }
 
@@ -59,6 +62,13 @@ public class MainActivity extends Activity implements GridEditorView.Host {
             preview.setConfig(cfg);
             refreshInfo();
         }
+        snaps.start();
+    }
+
+    @Override
+    protected void onPause() {
+        snaps.stop();
+        super.onPause();
     }
 
     private int dp(int v) { return Math.round(v * d); }
@@ -284,6 +294,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         setContentView(scroll);
         built = true;
         refreshInfo();
+        WallpaperLoader.load(this, bmp -> { if (bmp != null && preview != null) preview.setWallpaper(bmp); });
     }
 
     // ---------- dialogs ----------
@@ -405,6 +416,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         return l;
     }
 
+    @Override public Bitmap snapshot(String uid) { return snaps != null ? snaps.get(uid) : null; }
     @Override public void onChanged() { }
     @Override public void onSelected(Config.Widget w) { }
 }

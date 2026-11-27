@@ -11,6 +11,9 @@ import java.util.List;
 public class Config {
     public static final String AUTHORITY = "com.lockeditor.rs118.config";
     public static final String URI = "content://" + AUTHORITY + "/config";
+    public static final String URI_SNAP_REQ  = URI + "/snap";                           // app -> SystemUI: "take snapshots"
+    public static final String URI_SNAP_FILE = "content://" + AUTHORITY + "/snapfile";  // SystemUI writes <uid> here
+    public static final String URI_SNAP_DONE = "content://" + AUTHORITY + "/done";      // SystemUI -> app: "new files"
 
     public int rows = 8, cols = 4;
     public boolean hideClock, hideDate, hideNotifs, hideShortcuts, debug;

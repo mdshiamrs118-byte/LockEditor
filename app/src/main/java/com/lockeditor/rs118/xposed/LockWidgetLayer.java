@@ -8,6 +8,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentSender;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Rect;
@@ -20,8 +21,11 @@ import android.widget.FrameLayout;
 
 import com.lockeditor.rs118.Config;
 
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -41,6 +45,8 @@ final class LockWidgetLayer {
     private final AppWidgetHost host;
     private final AppWidgetManager mgr;
     private final Map<String, Entry> entries = new HashMap<>();
+    private final Map<String, Integer> lastHash = new HashMap<>();
+    private final Runnable snapRun = new Runnable() { @Override public void run() { snapshot(); } };
     private boolean lastShown;
 
     private static final class Entry {
@@ -128,6 +134,7 @@ final class LockWidgetLayer {
             if (!want.contains(e.uid)) {
                 overlay.removeView(e.view);
                 try { host.deleteAppWidgetId(e.id); } catch (Throwable ignored) { }
+                synchronized (lastHash) { lastHash.remove(e.uid); }
                 it.remove();
             }
         }
@@ -186,6 +193,68 @@ final class LockWidgetLayer {
             }
         }
         overlay.requestLayout();
+        scheduleSnapshot(1500);
+    }
+
+    // ---------------- snapshots for the editor / home preview ----------------
+    void scheduleSnapshot(long delayMs) {
+        KeyguardHooks.MAIN.removeCallbacks(snapRun);
+        KeyguardHooks.MAIN.postDelayed(snapRun, delayMs);
+    }
+
+    private Bitmap render(View v) {
+        if (!overlay.forceLayout(v)) return null;
+        int w = v.getWidth(), h = v.getHeight();
+        if (w <= 0 || h <= 0) return null;
+        float s = Math.min(1f, 1024f / Math.max(w, h));
+        Bitmap b = Bitmap.createBitmap(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(b);
+        cv.scale(s, s);
+        v.draw(cv);
+        return b;
+    }
+
+    /** Renders every hosted widget (works even while the lock screen is hidden) and ships changed ones to the app. */
+    private void snapshot() {
+        final Map<String, Bitmap> shots = new HashMap<>();
+        for (Entry e : entries.values()) {
+            try {
+                Bitmap b = render(e.view);
+                if (b != null) shots.put(e.uid, b);
+            } catch (Throwable t) {
+                KeyguardHooks.dlog("snapshot failed: " + t);
+            }
+        }
+        if (shots.isEmpty()) return;
+        KeyguardHooks.IO.execute(new Runnable() {
+            @Override public void run() {
+                boolean changed = false;
+                for (Map.Entry<String, Bitmap> s : shots.entrySet()) {
+                    try {
+                        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                        s.getValue().compress(Bitmap.CompressFormat.PNG, 100, bo);
+                        byte[] data = bo.toByteArray();
+                        int hash = Arrays.hashCode(data);
+                        synchronized (lastHash) {
+                            Integer old = lastHash.get(s.getKey());
+                            if (old != null && old == hash) continue;
+                        }
+                        OutputStream os = ctx.getContentResolver().openOutputStream(Uri.parse(Config.URI_SNAP_FILE + "/" + s.getKey()));
+                        if (os == null) continue;
+                        try { os.write(data); } finally { os.close(); }
+                        synchronized (lastHash) { lastHash.put(s.getKey(), hash); }
+                        changed = true;
+                    } catch (Throwable t) {
+                        KeyguardHooks.dlog("snapshot write failed: " + t);
+                    } finally {
+                        s.getValue().recycle();
+                    }
+                }
+                if (changed) {
+                    try { ctx.getContentResolver().call(URI, "snap_done", null, null); } catch (Throwable ignored) { }
+                }
+            }
+        });
     }
 
     private void requestGrant() {
@@ -277,6 +346,39 @@ final class LockWidgetLayer {
             }
         }
 
+        private void notifySize(View c, Rect rc) {
+            if (!(c instanceof AppWidgetHostView)) return;
+            float d = getResources().getDisplayMetrics().density;
+            int wdp = Math.round(rc.width() / d), hdp = Math.round(rc.height() / d);
+            int[] last = lastSize.get(c);
+            if (last == null || last[0] != wdp || last[1] != hdp) {
+                lastSize.put(c, new int[]{wdp, hdp});
+                try {
+                    ((AppWidgetHostView) c).updateAppWidgetSize(null, wdp, hdp, wdp, hdp);
+                } catch (Throwable ignored) { }
+            }
+        }
+
+        /** Lays a child out in its grid cell even while the layer is hidden (needed for snapshots). */
+        boolean forceLayout(View c) {
+            int ow = getWidth(), oh = getHeight();
+            if (ow <= 0 || oh <= 0) {
+                android.util.DisplayMetrics m = getResources().getDisplayMetrics();
+                ow = m.widthPixels;
+                oh = m.heightPixels;
+            }
+            int pl = getPaddingLeft(), pt = getPaddingTop();
+            Rect rc = cell(c, ow - pl - getPaddingRight(), oh - pt - getPaddingBottom());
+            if (rc == null || rc.width() <= 0 || rc.height() <= 0) return false;
+            if (c.getWidth() != rc.width() || c.getHeight() != rc.height()) {
+                c.measure(MeasureSpec.makeMeasureSpec(rc.width(), MeasureSpec.EXACTLY),
+                        MeasureSpec.makeMeasureSpec(rc.height(), MeasureSpec.EXACTLY));
+                c.layout(pl + rc.left, pt + rc.top, pl + rc.right, pt + rc.bottom);
+                notifySize(c, rc);
+            }
+            return true;
+        }
+
         @Override
         protected void onLayout(boolean changed, int l, int t, int r, int b) {
             if (!loggedLayout && r - l > 0 && b - t > 0) {
@@ -285,22 +387,12 @@ final class LockWidgetLayer {
             }
             int pl = getPaddingLeft(), pt = getPaddingTop();
             int iw = r - l - pl - getPaddingRight(), ih = b - t - pt - getPaddingBottom();
-            float d = getResources().getDisplayMetrics().density;
             for (int i = 0; i < getChildCount(); i++) {
                 View c = getChildAt(i);
                 Rect rc = cell(c, iw, ih);
                 if (rc == null) { c.layout(0, 0, 0, 0); continue; }
                 c.layout(pl + rc.left, pt + rc.top, pl + rc.right, pt + rc.bottom);
-                if (c instanceof AppWidgetHostView) {
-                    int wdp = Math.round(rc.width() / d), hdp = Math.round(rc.height() / d);
-                    int[] last = lastSize.get(c);
-                    if (last == null || last[0] != wdp || last[1] != hdp) {
-                        lastSize.put(c, new int[]{wdp, hdp});
-                        try {
-                            ((AppWidgetHostView) c).updateAppWidgetSize(null, wdp, hdp, wdp, hdp);
-                        } catch (Throwable ignored) { }
-                    }
-                }
+                notifySize(c, rc);
             }
         }
 

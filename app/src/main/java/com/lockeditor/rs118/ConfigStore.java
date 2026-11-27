@@ -7,6 +7,7 @@ import android.net.Uri;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -49,6 +50,7 @@ public final class ConfigStore {
 
     public static synchronized void saveLayout(Context c, Config cfg) {
         prefs(c).edit().putString("layout", cfg.toJson(false).toString()).apply();
+        pruneSnaps(c, cfg);
         notifyChanged(c);
     }
 
@@ -88,6 +90,29 @@ public final class ConfigStore {
             prefs(c).edit().putString("runtime", rt.toString()).apply();
         }
         return ids;
+    }
+
+    // ---- widget snapshots (rendered by SystemUI, shown by the editor/preview) ----
+    public static File snapDir(Context c) {
+        File d = new File(c.getFilesDir(), "snaps");
+        if (!d.isDirectory()) d.mkdirs();
+        return d;
+    }
+
+    public static void requestSnapshot(Context c) {
+        c.getContentResolver().notifyChange(Uri.parse(Config.URI_SNAP_REQ), null);
+    }
+
+    public static void notifySnapDone(Context c) {
+        c.getContentResolver().notifyChange(Uri.parse(Config.URI_SNAP_DONE), null);
+    }
+
+    private static void pruneSnaps(Context c, Config cfg) {
+        File[] fs = snapDir(c).listFiles();
+        if (fs == null) return;
+        Set<String> live = new HashSet<>();
+        for (Config.Widget w : cfg.widgets) live.add(w.uid + ".png");
+        for (File f : fs) if (!live.contains(f.getName())) f.delete();
     }
 
     // ---- diagnostics written by the SystemUI hook ----

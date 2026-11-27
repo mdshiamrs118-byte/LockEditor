@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -34,6 +35,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
 
     private Config cfg;
     private GridEditorView editor;
+    private SnapSync snaps;
     private FrameLayout root;
     private LinearLayout inspector, toolbar;
     private float d;
@@ -56,6 +58,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
 
         editor = new GridEditorView(this);
         editor.setHost(this);
+        snaps = new SnapSync(this, 2500, () -> editor.invalidate());
         editor.setMarginDp(0);
         editor.setConfig(cfg);
         DisplayMetrics m = new DisplayMetrics();
@@ -117,6 +120,9 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         immersive();
         WallpaperLoader.load(this, bmp -> { if (bmp != null) editor.setWallpaper(bmp); });
     }
+
+    @Override protected void onResume() { super.onResume(); snaps.start(); }
+    @Override protected void onPause() { snaps.stop(); super.onPause(); }
 
     @Override
     public void onWindowFocusChanged(boolean focus) {
@@ -361,6 +367,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         return l;
     }
 
+    @Override public Bitmap snapshot(String uid) { return snaps != null ? snaps.get(uid) : null; }
     @Override public void onChanged() { save(); rebuildInspector(); }
     @Override public void onSelected(Config.Widget w) { rebuildInspector(); }
 }
