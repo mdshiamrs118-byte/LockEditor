@@ -9,17 +9,21 @@ import android.graphics.drawable.Drawable;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Loads the current lock screen wallpaper (root first, WallpaperManager as fallback).
- * The result is cached only while the wallpaper files are unchanged (name + mtime + size),
- * so changing the wallpaper is picked up the next time load() is called.
+ * Of the lock and home wallpaper files the most recently modified one wins (a stale lock-only
+ * file must not hide a newer wallpaper). The result is cached only while the files are unchanged.
+ * The choice is written to the app's Status log.
  */
 public final class WallpaperLoader {
     public interface Cb { void done(Bitmap b); }
 
     private static final String DIR = "/data/system/users/0/";
-    // cropped files first (that is what the lock screen shows), uncropped originals last
     private static final String[] FILES = {"wallpaper_lock", "wallpaper", "wallpaper_lock_orig", "wallpaper_orig"};
     private static Bitmap cached;
     private static String cachedSig;
@@ -35,8 +39,12 @@ public final class WallpaperLoader {
                     if (cached != null && sig != null && sig.equals(cachedSig)) {
                         b = cached;
                     } else {
-                        b = fromRoot();
-                        if (b == null) { b = fromManager(a); sig = null; } // no signature -> never cache
+                        b = fromRoot(a, sig);
+                        if (b == null) {
+                            b = fromManager(a);
+                            ConfigStore.appendLog(a, "wallpaper: root read failed, used WallpaperManager (files: " + sig + ")");
+                            sig = null; // no signature -> never cache
+                        }
                         cached = b;
                         cachedSig = sig;
                     }
@@ -47,7 +55,7 @@ public final class WallpaperLoader {
         }).start();
     }
 
-    /** name:mtime:size of every wallpaper file that exists, or null if root is not available. */
+    /** "path:mtime:size" lines of every wallpaper file that exists, or null if root is not available. */
     private static String signature() {
         try {
             StringBuilder cmd = new StringBuilder("stat -c '%n:%Y:%s'");
@@ -67,8 +75,35 @@ public final class WallpaperLoader {
         }
     }
 
-    private static Bitmap fromRoot() {
-        for (String name : FILES) {
+    private static Map<String, Long> mtimes(String sig) {
+        Map<String, Long> m = new HashMap<>();
+        if (sig == null) return m;
+        for (String line : sig.split("\n")) {
+            String[] p = line.trim().split(":");
+            if (p.length < 3) continue;
+            try {
+                String path = p[0];
+                m.put(path.substring(path.lastIndexOf('/') + 1), Long.parseLong(p[1]));
+            } catch (NumberFormatException ignored) { }
+        }
+        return m;
+    }
+
+    /** Newest of lock/home cropped file first, then the other one, then the uncropped originals. */
+    private static List<String> order(Map<String, Long> mt) {
+        long lock = mt.containsKey("wallpaper_lock") ? mt.get("wallpaper_lock") : -1;
+        long home = mt.containsKey("wallpaper") ? mt.get("wallpaper") : -1;
+        List<String> o = new ArrayList<>();
+        if (home > lock) { o.add("wallpaper"); o.add("wallpaper_lock"); }
+        else { o.add("wallpaper_lock"); o.add("wallpaper"); }
+        o.add("wallpaper_lock_orig");
+        o.add("wallpaper_orig");
+        return o;
+    }
+
+    private static Bitmap fromRoot(Activity a, String sig) {
+        Map<String, Long> mt = mtimes(sig);
+        for (String name : order(mt)) {
             try {
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
                         "cat " + DIR + name + " 2>/dev/null"});
@@ -85,10 +120,15 @@ public final class WallpaperLoader {
                 BitmapFactory.decodeByteArray(data, 0, data.length, o);
                 int max = Math.max(o.outWidth, o.outHeight), s = 1;
                 while (max / s > 1800) s *= 2;
+                int w = o.outWidth, h = o.outHeight;
                 o = new BitmapFactory.Options();
                 o.inSampleSize = s;
                 Bitmap b = BitmapFactory.decodeByteArray(data, 0, data.length, o);
-                if (b != null) return b;
+                if (b != null) {
+                    ConfigStore.appendLog(a, "wallpaper: using " + name + " (" + w + "x" + h + "); files: "
+                            + (sig == null ? "?" : sig.replace(DIR, "").replace("\n", " | ")));
+                    return b;
+                }
             } catch (Throwable ignored) { }
         }
         return null;
