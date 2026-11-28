@@ -18,7 +18,7 @@ Push this folder to a GitHub repo -> Actions -> "Android CI" -> download the `Lo
 - **Guides**: pink dashed lines show alignment with other widgets and the grid; with a fine snap or Free they also pull magnetically.
 - **Undo / redo** (top bar) cover moves, resizes, adds, deletes and layer changes.
 - **Layers**: Back / ▼ / ▲ / Front in the widget panel. The last widget is drawn on top, on the lock screen too.
-- **Notifications**: the amber box is the lock screen notification list. Drag to move, corner handle to resize, or use the panel (W/H %, X/Y dp). Toggle it with the Notifs chip. Widgets sit above it, as on the real lock screen.
+- **Notifications**: the amber box is the lock screen notification list. Drag to move, corner handle to resize, or use the panel (W/H %, X/Y dp). Size mode **Stretch** scales the notifications with the box; **Reflow** resizes the list itself so notifications keep their size (more or fewer fit). **Max** caps how many are shown. Toggle the box with the Notifs chip. Widgets sit above it, as on the real lock screen.
 - The editor and home preview show live renders of the widgets as hosted by SystemUI.
 
 ## Backups

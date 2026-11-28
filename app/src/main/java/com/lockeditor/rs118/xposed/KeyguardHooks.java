@@ -138,6 +138,28 @@ final class KeyguardHooks {
             XposedBridge.log(t);
         }
 
+        // 5) Optional cap on how many notifications the lock screen shows
+        try {
+            Class<?> npvc = XposedHelpers.findClassIfExists(
+                    "com.android.systemui.statusbar.phone.NotificationPanelViewController", cl);
+            if (npvc != null) {
+                java.util.Set<XC_MethodHook.Unhook> hs = XposedBridge.hookAllMethods(npvc, "computeMaxKeyguardNotifications",
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam p) {
+                                int max = cfg.notifMax;
+                                Object r = p.getResult();
+                                if (max > 0 && r instanceof Integer && (Integer) r > max) p.setResult(max);
+                            }
+                        });
+                if (hs.isEmpty()) dlog("computeMaxKeyguardNotifications not found (max notifications won't work)");
+            } else {
+                dlog("NotificationPanelViewController not found (max notifications won't work)");
+            }
+        } catch (Throwable t) {
+            XposedBridge.log(t);
+        }
+
         // 4) Widget taps on the lock screen: dismiss keyguard then launch
         try {
             Class<?> och = XposedHelpers.findClassIfExists("android.widget.RemoteViews$OnClickHandler", cl);
@@ -296,33 +318,138 @@ final class KeyguardHooks {
     }
 
     // ---------------- notification list size / position ----------------
-    /** Called every frame from the layer sync. Scales/moves the lock screen notification list. */
+    private static final String NSSL = "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout";
+    private static float[] defRect;   // l,t,r,b,rootW,rootH of the stock list, captured before this module changes it
+    private static float parentOffX, parentOffY;
+    private static int[] origLp;      // width, height, left/top/right/bottom margin, gravity
+    private static boolean lpChanged, layoutWarned;
+    private static String lastNotifFlag = "", lastNotifRect = "";
+    private static long lastNotifReport;
+
+    private static View findNotif(View anchor) {
+        View n = notifRef.get();
+        if (n != null && n.isAttachedToWindow()) return n;
+        n = null;
+        if (anchor.getParent() instanceof View) {
+            List<View> found = new ArrayList<>();
+            collect((View) anchor.getParent(), NSSL, found);
+            if (!found.isEmpty()) n = found.get(0);
+        }
+        notifRef = new WeakReference<>(n);
+        defRect = null;
+        origLp = null;
+        lpChanged = false;
+        notifApplied = false;
+        String f = n == null ? "missing" : "ok";
+        if (!f.equals(lastNotifFlag)) {
+            lastNotifFlag = f;
+            flag("notif", f);
+        }
+        if (n == null && !notifMissingLogged) {
+            notifMissingLogged = true;
+            dlog("notification list view not found (size/position sliders won't work)");
+        }
+        return n;
+    }
+
+    /** Remembers where the stock list sits (and its layout params) before we touch it. */
+    private static void captureDefault(View n) {
+        if (defRect != null || lpChanged) return;
+        if (n.getWidth() <= 0 || n.getHeight() <= 0) return;
+        float px = 0, py = 0;
+        android.view.ViewParent p = n.getParent();
+        while (p instanceof View) {
+            View pv = (View) p;
+            px += pv.getLeft() - pv.getScrollX();
+            py += pv.getTop() - pv.getScrollY();
+            p = pv.getParent();
+        }
+        parentOffX = px;
+        parentOffY = py;
+        float x = n.getLeft() + px, y = n.getTop() + py;
+        View root = n.getRootView();
+        defRect = new float[]{x, y, x + n.getWidth(), y + n.getHeight(), root.getWidth(), root.getHeight()};
+        if (n.getLayoutParams() instanceof android.widget.FrameLayout.LayoutParams) {
+            android.widget.FrameLayout.LayoutParams f = (android.widget.FrameLayout.LayoutParams) n.getLayoutParams();
+            origLp = new int[]{f.width, f.height, f.leftMargin, f.topMargin, f.rightMargin, f.bottomMargin, f.gravity};
+        }
+    }
+
+    private static void resetTransform(View n) {
+        if (!notifApplied) return;
+        n.setScaleX(1f);
+        n.setScaleY(1f);
+        n.setTranslationX(0f);
+        n.setTranslationY(0f);
+        notifApplied = false;
+    }
+
+    private static void restoreLayout(View n) {
+        if (!lpChanged) return;
+        lpChanged = false;
+        if (origLp == null || !(n.getLayoutParams() instanceof android.widget.FrameLayout.LayoutParams)) return;
+        android.widget.FrameLayout.LayoutParams lp = (android.widget.FrameLayout.LayoutParams) n.getLayoutParams();
+        lp.width = origLp[0];
+        lp.height = origLp[1];
+        lp.leftMargin = origLp[2];
+        lp.topMargin = origLp[3];
+        lp.rightMargin = origLp[4];
+        lp.bottomMargin = origLp[5];
+        lp.gravity = origLp[6];
+        n.setLayoutParams(lp);
+    }
+
+    /** Reflow: really resize the list (its notifications keep their size and wrap to the new width). */
+    private static void applyLayout(View n, Config c, float den) {
+        float defW = defRect[2] - defRect[0], defH = defRect[3] - defRect[1];
+        float cx = (defRect[0] + defRect[2]) / 2f;
+        int w = Math.max(1, Math.round(defW * c.notifW / 100f)), h = Math.max(1, Math.round(defH * c.notifH / 100f));
+        float l = cx + c.notifDx * den - w / 2f, t = defRect[1] + c.notifDy * den;
+        ViewGroup parent = (ViewGroup) n.getParent();
+        int ml = Math.round(l - parentOffX - parent.getPaddingLeft());
+        int mt = Math.round(t - parentOffY - parent.getPaddingTop());
+        int g = android.view.Gravity.TOP | android.view.Gravity.LEFT;
+        android.widget.FrameLayout.LayoutParams lp = (android.widget.FrameLayout.LayoutParams) n.getLayoutParams();
+        if (lp.width != w || lp.height != h || lp.leftMargin != ml || lp.topMargin != mt
+                || lp.rightMargin != 0 || lp.bottomMargin != 0 || lp.gravity != g) {
+            lp.width = w;
+            lp.height = h;
+            lp.leftMargin = ml;
+            lp.topMargin = mt;
+            lp.rightMargin = 0;
+            lp.bottomMargin = 0;
+            lp.gravity = g;
+            n.setLayoutParams(lp);
+        }
+        lpChanged = true;
+    }
+
+    /** Called every frame from the layer sync. Stretches (scales) or reflows (resizes) and moves the notification list. */
     static void applyNotifTransform(View statusView, boolean shown) {
         Config c = cfg;
         boolean custom = c.notifW != 100 || c.notifH != 100 || c.notifDx != 0 || c.notifDy != 0;
         boolean want = shown && custom;
-        if (!want && !notifApplied) return;
-        View n = notifRef.get();
-        if (n == null || !n.isAttachedToWindow()) {
-            n = null;
-            if (statusView.getParent() instanceof View) {
-                List<View> found = new ArrayList<>();
-                collect((View) statusView.getParent(),
-                        "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout", found);
-                if (!found.isEmpty()) n = found.get(0);
-            }
-            notifRef = new WeakReference<>(n);
-            flag("notif", n == null ? "missing" : "ok");
-            if (n == null) {
-                if (!notifMissingLogged) {
-                    notifMissingLogged = true;
-                    dlog("notification list view not found (size/position sliders won't work)");
-                }
-                return;
+        if (!want && !notifApplied && !lpChanged) return;
+        View n = findNotif(statusView);
+        if (n == null) return;
+        captureDefault(n);
+        float d = n.getResources().getDisplayMetrics().density;
+        boolean reflow = c.notifMode == 1;
+        if (reflow && (defRect == null || origLp == null || !(n.getParent() instanceof ViewGroup))) {
+            reflow = false; // this ROM's layout is not what we expect: fall back to scaling
+            if (!layoutWarned) {
+                layoutWarned = true;
+                dlog("notification list cannot be resized on this ROM, using stretch instead");
             }
         }
-        if (want) {
-            float d = n.getResources().getDisplayMetrics().density;
+        if (!want) {
+            resetTransform(n);
+            restoreLayout(n);
+        } else if (reflow) {
+            resetTransform(n);
+            applyLayout(n, c, d);
+        } else {
+            restoreLayout(n);
             float sx = c.notifW / 100f, sy = c.notifH / 100f, tx = c.notifDx * d, ty = c.notifDy * d;
             n.setPivotX(n.getWidth() / 2f);
             n.setPivotY(0f);
@@ -331,48 +458,22 @@ final class KeyguardHooks {
             if (n.getTranslationX() != tx) n.setTranslationX(tx);
             if (n.getTranslationY() != ty) n.setTranslationY(ty);
             notifApplied = true;
-        } else {
-            n.setScaleX(1f);
-            n.setScaleY(1f);
-            n.setTranslationX(0f);
-            n.setTranslationY(0f);
-            notifApplied = false;
         }
     }
 
     // ---------------- tell the app where the notification list sits (for the editor) ----------------
-    private static long lastNotifReport;
-    private static String lastNotifRect = "";
-
     static void reportNotifBounds(View anchor) {
         long now = SystemClock.uptimeMillis();
         if (now - lastNotifReport < 1500) return;
         lastNotifReport = now;
         try {
-            View n = notifRef.get();
-            if (n == null || !n.isAttachedToWindow()) {
-                n = null;
-                if (anchor.getParent() instanceof View) {
-                    List<View> found = new ArrayList<>();
-                    collect((View) anchor.getParent(),
-                            "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout", found);
-                    if (!found.isEmpty()) n = found.get(0);
-                }
-                notifRef = new WeakReference<>(n);
-            }
-            if (n == null || n.getWidth() <= 0 || n.getHeight() <= 0) return;
-            // layout bounds in window coordinates, not including the scale/offset this module applies
-            float x = n.getLeft(), y = n.getTop();
-            android.view.ViewParent p = n.getParent();
-            while (p instanceof View) {
-                View pv = (View) p;
-                x += pv.getLeft() - pv.getScrollX();
-                y += pv.getTop() - pv.getScrollY();
-                p = pv.getParent();
-            }
-            View root = n.getRootView();
-            String v = Math.round(x) + "," + Math.round(y) + "," + Math.round(x + n.getWidth()) + ","
-                    + Math.round(y + n.getHeight()) + "," + root.getWidth() + "," + root.getHeight();
+            View n = findNotif(anchor);
+            if (n == null) return;
+            captureDefault(n);
+            float[] r = defRect;
+            if (r == null) return;
+            String v = Math.round(r[0]) + "," + Math.round(r[1]) + "," + Math.round(r[2]) + ","
+                    + Math.round(r[3]) + "," + Math.round(r[4]) + "," + Math.round(r[5]);
             if (!v.equals(lastNotifRect)) {
                 lastNotifRect = v;
                 flag("notifrect", v);

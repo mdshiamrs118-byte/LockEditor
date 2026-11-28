@@ -318,24 +318,47 @@ public class GridEditorView extends View {
         return notifXf(r[0], r[1], r[2], r[3], r);
     }
 
+    /** Current notification box in window px (l,t,r,b): scaled about the top center, then offset. */
+    private float[] notifBoxRef(float[] ref) {
+        float den = real.density;
+        float cx = (ref[0] + ref[2]) / 2f;
+        float nw = (ref[2] - ref[0]) * cfg.notifW / 100f, nh = (ref[3] - ref[1]) * cfg.notifH / 100f;
+        float cxn = cx + cfg.notifDx * den, top = ref[1] + cfg.notifDy * den;
+        return new float[]{cxn - nw / 2f, top, cxn + nw / 2f, top + nh};
+    }
+
+    /** Window px -> view px, without any notification scaling. */
+    private RectF plainXf(float l, float t, float r, float b, float[] ref) {
+        float fx = screen.width() / ref[4], fy = screen.height() / ref[5];
+        return new RectF(screen.left + l * fx, screen.top + t * fy, screen.left + r * fx, screen.top + b * fy);
+    }
+
+    private RectF cardXf(boolean reflow, float l, float t, float r, float b, float[] ref) {
+        return reflow ? plainXf(l, t, r, b, ref) : notifXf(l, t, r, b, ref);
+    }
+
     private void drawNotif(Canvas c, float rad) {
         float[] r = nRef();
         float den = real.density;
         RectF box = notifXf(r[0], r[1], r[2], r[3], r);
-        boolean off = cfg.hideNotifs;
+        boolean off = cfg.hideNotifs, reflow = cfg.notifMode == 1;
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(off ? 0x14FFFFFF : 0x24FFC107);
         c.drawRoundRect(box, rad, rad, paint);
-        if (!off) { // a few stand-in notification cards, scaled like the real list
-            float m = 12 * den, cardH = 64 * den, gap = 8 * den, w = r[2] - r[0];
-            for (int i = 0; i < 6; i++) {
-                float top = r[1] + m + i * (cardH + gap);
-                if (top + cardH > r[3] - m) break;
+        if (!off) {
+            // stand-in cards. Stretch: they scale with the box. Reflow: they keep their size, the box just shows more or fewer.
+            float[] bx = reflow ? notifBoxRef(r) : r;
+            float m = 12 * den, cardH = 64 * den, gap = 8 * den;
+            int limit = cfg.notifMax > 0 ? cfg.notifMax : 6;
+            for (int i = 0; i < limit; i++) {
+                float top = bx[1] + m + i * (cardH + gap);
+                if (top + cardH > bx[3] - m) break;
+                float l = bx[0] + m, rr = bx[2] - m, w = rr - l;
                 paint.setColor(light ? 0x99FFFFFF : 0x55FFFFFF);
-                c.drawRoundRect(notifXf(r[0] + m, top, r[2] - m, top + cardH, r), 10 * dp, 10 * dp, paint);
+                c.drawRoundRect(cardXf(reflow, l, top, rr, top + cardH, r), 10 * dp, 10 * dp, paint);
                 paint.setColor(0x66000000);
-                c.drawRoundRect(notifXf(r[0] + m + 16 * den, top + 14 * den, r[0] + m + 16 * den + w * 0.35f, top + 24 * den, r), 3 * dp, 3 * dp, paint);
-                c.drawRoundRect(notifXf(r[0] + m + 16 * den, top + 34 * den, r[0] + m + 16 * den + w * 0.6f, top + 42 * den, r), 3 * dp, 3 * dp, paint);
+                c.drawRoundRect(cardXf(reflow, l + 16 * den, top + 14 * den, l + 16 * den + w * 0.35f, top + 24 * den, r), 3 * dp, 3 * dp, paint);
+                c.drawRoundRect(cardXf(reflow, l + 16 * den, top + 34 * den, l + 16 * den + w * 0.6f, top + 42 * den, r), 3 * dp, 3 * dp, paint);
             }
         }
         paint.setStyle(Paint.Style.STROKE);

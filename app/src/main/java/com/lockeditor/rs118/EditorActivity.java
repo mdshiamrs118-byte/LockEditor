@@ -304,6 +304,8 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         cfg.notifDx = t.notifDx;
         cfg.notifDy = t.notifDy;
         cfg.hideNotifs = t.hideNotifs;
+        cfg.notifMode = t.notifMode;
+        cfg.notifMax = t.notifMax;
         Config.Widget keep = null;
         for (Config.Widget w : cfg.widgets) if (w.uid.equals(selUid)) keep = w;
         editor.setSelected(keep);
@@ -511,8 +513,17 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         r2.addView(mini("Y dp", cfg.notifDy, 7, 36), new LinearLayout.LayoutParams(0, -2, 1f));
         inspector.addView(r1);
         inspector.addView(r2);
+        LinearLayout r3 = new LinearLayout(this);
+        r3.setGravity(Gravity.CENTER_VERTICAL);
+        r3.addView(mini("Max", cfg.notifMax, 8, 36), new LinearLayout.LayoutParams(0, -2, 1f));
+        r3.addView(miniChip("Size: " + (cfg.notifMode == 1 ? "Reflow" : "Stretch"), v -> {
+            cfg.notifMode = cfg.notifMode == 1 ? 0 : 1;
+            commit();
+        }));
+        inspector.addView(r3);
         TextView cap = new TextView(this);
-        cap.setText("Drag the box to move it (it snaps to the grid), the corner handle to resize. W/H = size in %, X/Y = offset in dp.");
+        cap.setText("Drag the box to move it (it snaps to the grid), the corner handle to resize. W/H = size in %, X/Y = offset in dp. "
+                + "Stretch scales the notifications with the box; Reflow resizes the list so they keep their size. Max 0 = auto.");
         cap.setTextColor(0xFFB8BCC8);
         cap.setTextSize(11);
         cap.setPadding(0, dp(4), 0, dp(6));
@@ -535,6 +546,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
             case 4: cfg.notifW = limits.clamp(Limits.NW, cfg.notifW + delta * 5); break;
             case 5: cfg.notifH = limits.clamp(Limits.NH, cfg.notifH + delta * 5); break;
             case 6: cfg.notifDx = limits.clamp(Limits.NDX, cfg.notifDx + delta * 10); break;
+            case 8: cfg.notifMax = Math.max(0, Math.min(12, cfg.notifMax + delta)); break;
             default: cfg.notifDy = limits.clamp(Limits.NDY, cfg.notifDy + delta * 10);
         }
         commit();

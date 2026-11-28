@@ -246,6 +246,12 @@ public class MainActivity extends BaseActivity implements GridEditorView.Host {
         nc.addView(slider("Height", cfg.notifH, lim.min[Limits.NH], lim.max[Limits.NH], "%", v -> cfg.notifH = v));
         nc.addView(slider("Left / right", cfg.notifDx, lim.min[Limits.NDX], lim.max[Limits.NDX], "dp", v -> cfg.notifDx = v));
         nc.addView(slider("Up / down", cfg.notifDy, lim.min[Limits.NDY], lim.max[Limits.NDY], "dp", v -> cfg.notifDy = v));
+        nc.addView(tapRow("Size mode: " + (cfg.notifMode == 1 ? "Reflow" : "Stretch"), v -> {
+            cfg.notifMode = cfg.notifMode == 1 ? 0 : 1;
+            save();
+            recreate();
+        }));
+        nc.addView(slider("Max (0 = auto)", cfg.notifMax, 0, 12, "", v -> cfg.notifMax = v));
         nc.addView(tapRow("Reset", v -> {
             cfg.notifW = 100; cfg.notifH = 100; cfg.notifDx = 0; cfg.notifDy = 0;
             save();

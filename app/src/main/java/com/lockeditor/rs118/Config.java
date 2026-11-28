@@ -24,6 +24,8 @@ public class Config {
     public int insetTop, insetBottom; // dp, shrinks the widget area
     public int notifW = 100, notifH = 100; // % size of the lock screen notification list
     public int notifDx, notifDy;           // dp offset of the notification list
+    public int notifMode;                  // 0 = stretch (scale the list), 1 = reflow (resize the list, notifications keep their size)
+    public int notifMax;                   // most notifications shown on the lock screen, 0 = stock behaviour
     /** List order is the layer order: the last widget is drawn on top. */
     public final List<Widget> widgets = new ArrayList<>();
     public final List<Integer> orphans = new ArrayList<>(); // widget ids SystemUI should free
@@ -77,6 +79,7 @@ public class Config {
                     .put("hideLockIcon", hideLockIcon).put("hideHints", hideHints)
                     .put("hideCarrier", hideCarrier).put("hideStatusBar", hideStatusBar)
                     .put("debug", debug).put("notifW", notifW).put("notifH", notifH).put("notifDx", notifDx).put("notifDy", notifDy)
+                    .put("notifMode", notifMode).put("notifMax", notifMax)
                     .put("insetTop", insetTop).put("insetBottom", insetBottom);
             JSONArray a = new JSONArray();
             for (Widget w : widgets) {
@@ -115,6 +118,8 @@ public class Config {
             c.notifH = Math.max(10, o.optInt("notifH", 100));
             c.notifDx = o.optInt("notifDx");
             c.notifDy = o.optInt("notifDy");
+            c.notifMode = o.optInt("notifMode");
+            c.notifMax = Math.max(0, o.optInt("notifMax"));
             c.insetTop = o.optInt("insetTop");
             c.insetBottom = o.optInt("insetBottom");
             JSONArray a = o.optJSONArray("widgets");
