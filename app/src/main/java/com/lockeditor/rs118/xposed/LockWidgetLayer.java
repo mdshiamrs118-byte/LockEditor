@@ -102,6 +102,7 @@ final class LockWidgetLayer {
         if (overlay.getAlpha() != a) overlay.setAlpha(a);
         boolean shown = vis == View.VISIBLE && a > 0.05f;
         KeyguardHooks.applyNotifTransform(sv, shown);
+        KeyguardHooks.reportNotifBounds(sv);
         if (shown != lastShown) {
             lastShown = shown;
             KeyguardHooks.dlog("lock screen " + (shown ? "SHOWN" : "hidden") + " (alpha=" + a + ")");
@@ -241,6 +242,7 @@ final class LockWidgetLayer {
 
     /** Renders every hosted widget (works even while the lock screen is hidden) and ships changed ones to the app. */
     private void snapshot() {
+        KeyguardHooks.reportNotifBounds(overlay);
         final Map<String, Bitmap> shots = new HashMap<>();
         for (Entry e : entries.values()) {
             try {

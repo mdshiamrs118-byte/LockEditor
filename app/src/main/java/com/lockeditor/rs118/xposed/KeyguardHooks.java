@@ -340,6 +340,46 @@ final class KeyguardHooks {
         }
     }
 
+    // ---------------- tell the app where the notification list sits (for the editor) ----------------
+    private static long lastNotifReport;
+    private static String lastNotifRect = "";
+
+    static void reportNotifBounds(View anchor) {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastNotifReport < 1500) return;
+        lastNotifReport = now;
+        try {
+            View n = notifRef.get();
+            if (n == null || !n.isAttachedToWindow()) {
+                n = null;
+                if (anchor.getParent() instanceof View) {
+                    List<View> found = new ArrayList<>();
+                    collect((View) anchor.getParent(),
+                            "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout", found);
+                    if (!found.isEmpty()) n = found.get(0);
+                }
+                notifRef = new WeakReference<>(n);
+            }
+            if (n == null || n.getWidth() <= 0 || n.getHeight() <= 0) return;
+            // layout bounds in window coordinates, not including the scale/offset this module applies
+            float x = n.getLeft(), y = n.getTop();
+            android.view.ViewParent p = n.getParent();
+            while (p instanceof View) {
+                View pv = (View) p;
+                x += pv.getLeft() - pv.getScrollX();
+                y += pv.getTop() - pv.getScrollY();
+                p = pv.getParent();
+            }
+            View root = n.getRootView();
+            String v = Math.round(x) + "," + Math.round(y) + "," + Math.round(x + n.getWidth()) + ","
+                    + Math.round(y + n.getHeight()) + "," + root.getWidth() + "," + root.getHeight();
+            if (!v.equals(lastNotifRect)) {
+                lastNotifRect = v;
+                flag("notifrect", v);
+            }
+        } catch (Throwable ignored) { }
+    }
+
     // ---------------- hide logic ----------------
     private static boolean isHidden(String cat) {
         Config c = cfg;
