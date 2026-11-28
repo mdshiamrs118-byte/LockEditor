@@ -29,9 +29,11 @@ public class GridEditorView extends View {
         Bitmap snapshot(String uid);
         void onChanged();
         void onSelected(Config.Widget w);
+        void onNotifSelected(boolean selected);
     }
 
     private static final int NONE = 0, MOVE = 1, RESIZE = 2;
+    private static final int NOTIF_MOVE = 3, NOTIF_RESIZE = 4;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF area = new RectF();   // widget grid area (screen minus top/bottom inset)
     private final RectF screen = new RectF(); // the whole phone screen, same aspect as the real display
@@ -47,6 +49,9 @@ public class GridEditorView extends View {
     private int mode;
     private float downX, downY, oRow, oCol, oRs, oCs;
     private boolean dirty;
+    private boolean notifSel;
+    private Limits lim = new Limits();
+    private int oNW, oNH, oNDx, oNDy;
 
     public GridEditorView(Context c) {
         super(c);
@@ -72,7 +77,20 @@ public class GridEditorView extends View {
     public void setSnap(float s) { snap = s; invalidate(); }
     public void setGuides(boolean g) { guides = g; invalidate(); }
     public Config.Widget getSelected() { return sel; }
-    public void setSelected(Config.Widget w) { sel = w; invalidate(); }
+    public void setSelected(Config.Widget w) { sel = w; if (w != null) notifSel = false; invalidate(); }
+    public boolean isNotifSelected() { return notifSel; }
+    public void setNotifSelected(boolean b) { notifSel = b; if (b) sel = null; invalidate(); }
+    public void setLimits(Limits l) { lim = l; }
+
+    /** The lock screen notification list as the hook shows it: scaled around top-center, then translated. */
+    private RectF notifRect() {
+        float k = screen.width() / Math.max(1, real.widthPixels); // preview px per real px
+        float baseW = screen.width(), baseH = area.height();
+        float w = baseW * cfg.notifW / 100f, h = baseH * cfg.notifH / 100f;
+        float cx = screen.centerX() + cfg.notifDx * real.density * k;
+        float top = area.top + cfg.notifDy * real.density * k;
+        return new RectF(cx - w / 2f, top, cx + w / 2f, top + h);
+    }
 
     private void computeArea() {
         float m = marginDp * dp;
@@ -193,6 +211,38 @@ public class GridEditorView extends View {
             }
         }
 
+        { // notification list box (always shown so it can be grabbed)
+            RectF r = notifRect();
+            boolean s = notifSel;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(light ? (s ? 0x66F4A261 : 0x33F4A261) : (s ? 0x66FFB74D : 0x33FFB74D));
+            c.drawRoundRect(r, rad, rad, paint);
+            // fake notification cards so it reads as a notification list
+            float cardH = Math.min(46 * dp, Math.max(14 * dp, r.height() / 6f)), gap = 6 * dp, pad = 6 * dp;
+            paint.setColor(light ? 0x99FFFFFF : 0x55FFFFFF);
+            for (float y = r.top + pad; y + cardH <= r.bottom - pad && y < r.top + pad + 3 * (cardH + gap); y += cardH + gap)
+                c.drawRoundRect(new RectF(r.left + pad, y, r.right - pad, y + cardH), 5 * dp, 5 * dp, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth((s ? 3 : 1.5f) * dp);
+            paint.setColor(s ? 0xFFFF9800 : 0xFFFFB74D);
+            paint.setPathEffect(new DashPathEffect(new float[]{10 * dp, 5 * dp}, 0));
+            c.drawRoundRect(r, rad, rad, paint);
+            paint.setPathEffect(null);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(light ? 0xFF1B1F29 : 0xFFFFFFFF);
+            if (!light) paint.setShadowLayer(2 * dp, 0, 0, 0xFF000000);
+            paint.setTextSize(11 * dp);
+            c.save();
+            c.clipRect(r);
+            c.drawText("Notifications  " + cfg.notifW + "% × " + cfg.notifH + "%", r.left + 8 * dp, r.top + 14 * dp, paint);
+            c.restore();
+            paint.clearShadowLayer();
+            if (s && interactive) {
+                paint.setColor(0xFFFF9800);
+                c.drawRoundRect(new RectF(r.right - 14 * dp, r.bottom - 14 * dp, r.right, r.bottom), 3 * dp, 3 * dp, paint);
+            }
+        }
+
         if (!gx.isEmpty() || !gy.isEmpty()) { // alignment guides while dragging
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1.5f * dp);
@@ -217,7 +267,16 @@ public class GridEditorView extends View {
         }
     }
 
+    private void selectNotif() {
+        boolean was = notifSel;
+        notifSel = true;
+        sel = null;
+        if (host != null) { host.onSelected(null); if (!was) host.onNotifSelected(true); }
+        invalidate();
+    }
+
     private void select(Config.Widget w) {
+        if (w != null && notifSel) { notifSel = false; if (host != null) host.onNotifSelected(false); }
         if (w != sel) {
             sel = w;
             if (host != null) host.onSelected(w);
@@ -276,6 +335,15 @@ public class GridEditorView extends View {
                 computeArea();
                 mode = NONE;
                 Config.Widget hit = null;
+                RectF nr = notifRect();
+                float nhs = 32 * dp;
+                if (notifSel && x > nr.right - nhs && x < nr.right + nhs / 2 && y > nr.bottom - nhs && y < nr.bottom + nhs / 2) {
+                    mode = NOTIF_RESIZE; // handle of the selected notification box wins
+                    oNW = cfg.notifW; oNH = cfg.notifH; oNDx = cfg.notifDx; oNDy = cfg.notifDy;
+                    downX = x; downY = y;
+                    if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                    return true;
+                }
                 if (sel != null) {
                     RectF r = rectOf(sel);
                     float hs = 32 * dp;
@@ -290,6 +358,15 @@ public class GridEditorView extends View {
                         if (rectOf(w).contains(x, y)) { hit = w; mode = MOVE; break; }
                     }
                 }
+                if (hit == null && nr.contains(x, y)) { // empty-grid tap inside the notification box
+                    selectNotif();
+                    mode = NOTIF_MOVE;
+                    oNW = cfg.notifW; oNH = cfg.notifH; oNDx = cfg.notifDx; oNDy = cfg.notifDy;
+                    downX = x; downY = y;
+                    if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                    return true;
+                }
+                if (hit == null && notifSel) { notifSel = false; if (host != null) host.onNotifSelected(false); }
                 select(hit);
                 if (hit != null) {
                     downX = x; downY = y;
@@ -299,6 +376,28 @@ public class GridEditorView extends View {
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                if (mode == NOTIF_MOVE || mode == NOTIF_RESIZE) {
+                    float k = screen.width() / Math.max(1, real.widthPixels);
+                    float pxPerDp = real.density * k; // preview px per dp
+                    float baseW = screen.width(), baseH = Math.max(1, area.height());
+                    if (mode == NOTIF_MOVE) {
+                        cfg.notifDx = lim.clamp(Limits.NDX, Math.round(oNDx + (x - downX) / pxPerDp));
+                        cfg.notifDy = lim.clamp(Limits.NDY, Math.round(oNDy + (y - downY) / pxPerDp));
+                    } else {
+                        // right/bottom handle: the left and top edges stay where they are
+                        float wPx = baseW * oNW / 100f + (x - downX), hPx = baseH * oNH / 100f + (y - downY);
+                        int nw = lim.clamp(Limits.NW, Math.round(wPx / baseW * 100f));
+                        int nh = lim.clamp(Limits.NH, Math.round(hPx / baseH * 100f));
+                        cfg.notifW = nw;
+                        cfg.notifH = nh;
+                        // scaling happens around top-center, so shift X to keep the left edge fixed
+                        float shiftPx = baseW * (nw - oNW) / 200f;
+                        cfg.notifDx = lim.clamp(Limits.NDX, Math.round(oNDx + shiftPx / pxPerDp));
+                    }
+                    dirty = dirty || cfg.notifW != oNW || cfg.notifH != oNH || cfg.notifDx != oNDx || cfg.notifDy != oNDy;
+                    invalidate();
+                    return true;
+                }
                 if (sel == null || mode == NONE) return true;
                 float cw = area.width() / cfg.cols, ch = area.height() / cfg.rows;
                 float dc = (x - downX) / cw, dr = (y - downY) / ch;

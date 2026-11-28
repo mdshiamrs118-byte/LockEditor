@@ -78,6 +78,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         snaps = new SnapSync(this, 2500, () -> editor.invalidate());
         editor.setMarginDp(0);
         editor.setConfig(cfg);
+        editor.setLimits(Limits.load(this));
         editor.setSnap(snap);
         editor.setGuides(guides);
         root.addView(editor, new FrameLayout.LayoutParams(-1, -1));
@@ -277,6 +278,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         String selUid = old != null ? old.uid : null;
         cfg.widgets.clear();
         cfg.widgets.addAll(t.widgets);
+        cfg.notifW = t.notifW; cfg.notifH = t.notifH; cfg.notifDx = t.notifDx; cfg.notifDy = t.notifDy;
         Config.Widget keep = null;
         for (Config.Widget w : cfg.widgets) if (w.uid.equals(selUid)) keep = w;
         editor.setSelected(keep);
@@ -327,6 +329,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
 
     private void rebuildInspector() {
         inspector.removeAllViews();
+        if (editor.isNotifSelected()) { buildNotifInspector(); return; }
         Config.Widget w = editor.getSelected();
         if (w == null) { inspector.setVisibility(View.GONE); return; }
         inspector.setVisibility(View.VISIBLE);
@@ -366,6 +369,77 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         lr.addView(miniChip("▲", v -> layer(2)), marginLp(dp(6)));
         lr.addView(miniChip("Front", v -> layer(3)), marginLp(dp(6)));
         inspector.addView(lr);
+    }
+
+    private void buildNotifInspector() {
+        inspector.setVisibility(View.VISIBLE);
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView name = new TextView(this);
+        name.setText("Notification list");
+        name.setTextColor(Color.WHITE);
+        name.setTextSize(15);
+        name.setTypeface(name.getTypeface(), android.graphics.Typeface.BOLD);
+        head.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(miniChip("Reset", v -> {
+            cfg.notifW = 100; cfg.notifH = 100; cfg.notifDx = 0; cfg.notifDy = 0;
+            commit();
+        }), marginLp(dp(6)));
+        TextView move = chip(inspectorTop ? "Move panel down" : "Move panel up");
+        move.setBackground(rounded(0x33FFFFFF, 16));
+        move.setOnClickListener(v -> { inspectorTop = !inspectorTop; placeInspector(); });
+        head.addView(move, marginLp(dp(6)));
+        inspector.addView(head);
+        LinearLayout r1 = new LinearLayout(this), r2 = new LinearLayout(this);
+        r1.addView(notifMini("Width %", cfg.notifW, 0), new LinearLayout.LayoutParams(0, -2, 1f));
+        r1.addView(notifMini("Height %", cfg.notifH, 1), new LinearLayout.LayoutParams(0, -2, 1f));
+        r2.addView(notifMini("Left/right", cfg.notifDx, 2), new LinearLayout.LayoutParams(0, -2, 1f));
+        r2.addView(notifMini("Up/down", cfg.notifDy, 3), new LinearLayout.LayoutParams(0, -2, 1f));
+        inspector.addView(r1);
+        inspector.addView(r2);
+    }
+
+    private View notifMini(String label, int value, final int field) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        TextView l = new TextView(this);
+        l.setText(label);
+        l.setTextColor(0xFFB8BCC8);
+        l.setTextSize(12);
+        r.addView(l, new LinearLayout.LayoutParams(dp(62), -2));
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            final int sg = sgn;
+            if (sgn == 1) {
+                TextView v = new TextView(this);
+                v.setText(String.valueOf(value));
+                v.setTextColor(Color.WHITE);
+                v.setTextSize(14);
+                v.setGravity(Gravity.CENTER);
+                r.addView(v, new LinearLayout.LayoutParams(dp(44), -2));
+            }
+            TextView t = new TextView(this);
+            t.setText(sgn < 0 ? "−" : "+");
+            t.setTextColor(Color.WHITE);
+            t.setTextSize(18);
+            t.setGravity(Gravity.CENTER);
+            t.setBackground(rounded(0x33FFFFFF, 18));
+            t.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
+            t.setOnClickListener(v -> adjustNotif(field, sg));
+            r.addView(t);
+        }
+        return r;
+    }
+
+    private void adjustNotif(int field, int sg) {
+        Limits lim = Limits.load(this);
+        int step = field < 2 ? 5 : 10;
+        switch (field) {
+            case 0: cfg.notifW = lim.clamp(Limits.NW, cfg.notifW + sg * step); break;
+            case 1: cfg.notifH = lim.clamp(Limits.NH, cfg.notifH + sg * step); break;
+            case 2: cfg.notifDx = lim.clamp(Limits.NDX, cfg.notifDx + sg * step); break;
+            default: cfg.notifDy = lim.clamp(Limits.NDY, cfg.notifDy + sg * step);
+        }
+        commit();
     }
 
     private void layer(int op) { // 0 = send to back, 1 = one down, 2 = one up, 3 = bring to front
@@ -543,4 +617,5 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
     @Override public Bitmap snapshot(String uid) { return snaps != null ? snaps.get(uid) : null; }
     @Override public void onChanged() { commit(); }
     @Override public void onSelected(Config.Widget w) { rebuildInspector(); }
+    @Override public void onNotifSelected(boolean selected) { rebuildInspector(); }
 }

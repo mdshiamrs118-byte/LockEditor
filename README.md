@@ -20,6 +20,8 @@ Push this folder to a GitHub repo -> Actions -> "Android CI" -> download the `Lo
 - **Layers**: Back / ▼ / ▲ / Front in the widget panel. The last widget is drawn on top, on the lock screen too.
 - The editor and home preview show live renders of the widgets as hosted by SystemUI.
 
+- **Notification list**: the orange dashed box on the grid is the lock screen notification list. Tap it to select, drag to move, drag the corner handle to resize; the panel has +/− fields and Reset. Sizes use the same limits as Tools > Advanced.
+
 ## Backups
 Backups list: new, restore (saves the current state first), rename, delete, export to a .json file, import from a file.
 
