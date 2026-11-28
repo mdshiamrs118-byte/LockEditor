@@ -51,6 +51,7 @@ public class GridEditorView extends View {
     private float[] nRect;   // see setNotifRect
     private Limits limits;
     private int oNW, oNH, oNDx, oNDy;
+    private float grabX, grabY; // where the resize handle was grabbed, relative to the box corner
 
     public GridEditorView(Context c) {
         super(c);
@@ -251,6 +252,13 @@ public class GridEditorView extends View {
             t.add(p + s / 2f);
             t.add(p + s);
         }
+        if (showNotif && !notifSel && !cfg.hideNotifs) { // the notification list is something to line up with, too
+            float[] b = notifCells();
+            float p = xAxis ? b[0] : b[1], q = xAxis ? b[2] : b[3];
+            t.add(p);
+            t.add((p + q) / 2f);
+            t.add(q);
+        }
         return t;
     }
 
@@ -357,22 +365,71 @@ public class GridEditorView extends View {
         c.drawRoundRect(new RectF(box.right - 14 * dp, box.bottom - 14 * dp, box.right, box.bottom), 3 * dp, 3 * dp, paint);
     }
 
+    /** The notification box in grid cells: left, top, right, bottom. */
+    private float[] notifCells() {
+        RectF v = notifView();
+        float cw = area.width() / cfg.cols, ch = area.height() / cfg.rows;
+        return new float[]{(v.left - area.left) / cw, (v.top - area.top) / ch, (v.right - area.left) / cw, (v.bottom - area.top) / ch};
+    }
+
+    /** Shift (in cells) that puts either the near edge or the far edge of a span on a snap step, whichever is closer. */
+    private float edgeSnap(float p, float size) {
+        if (snap <= 0) return 0;
+        float a = snapV(p) - p, b = snapV(p + size) - (p + size);
+        return Math.abs(a) <= Math.abs(b) ? a : b;
+    }
+
+    private void collectNotifGuides() {
+        gx.clear();
+        gy.clear();
+        float[] b = notifCells();
+        float[] ex = mode == NMOVE ? new float[]{b[0], (b[0] + b[2]) / 2f, b[2]} : new float[]{b[2]};
+        float[] ey = mode == NMOVE ? new float[]{b[1], (b[1] + b[3]) / 2f, b[3]} : new float[]{b[3]};
+        // the size is stored in whole percent, so allow a little more slack than for widgets
+        for (float t : targets(true)) for (float e : ex) if (Math.abs(t - e) < 0.04f && !gx.contains(t)) gx.add(t);
+        for (float t : targets(false)) for (float e : ey) if (Math.abs(t - e) < 0.04f && !gy.contains(t)) gy.add(t);
+    }
+
+    /** Moves/resizes the notification box. Edges snap to the grid and align with other widgets, like widgets do. */
     private void moveNotif(float x, float y) {
         float[] r = nRef();
         float den = real.density;
-        float fx = screen.width() / r[4], fy = screen.height() / r[5];
+        float fx = screen.width() / r[4], fy = screen.height() / r[5];      // view px per window px
+        float cw = area.width() / cfg.cols, ch = area.height() / cfg.rows; // view px per cell
+        float ox = screen.left - area.left, oy = screen.top - area.top;
         Limits lim = limits != null ? limits : new Limits();
+        float cx = (r[0] + r[2]) / 2f, defW = Math.max(1, r[2] - r[0]), defH = Math.max(1, r[3] - r[1]);
+        float oW = defW * oNW / 100f, oH = defH * oNH / 100f;               // box at the start of the drag (window px)
+        float oL = cx + oNDx * den - oW / 2f, oT = r[1] + oNDy * den;
+        boolean magnet = guides && snap != 1f; // with whole-cell snapping the grid itself is the guide
+        float thX = 6 * dp / cw, thY = 6 * dp / ch;
         if (mode == NMOVE) {
-            cfg.notifDx = lim.clamp(Limits.NDX, Math.round(oNDx + (x - downX) / fx / den));
-            cfg.notifDy = lim.clamp(Limits.NDY, Math.round(oNDy + (y - downY) / fy / den));
-        } else { // the corner follows the finger; the list is scaled around its top center
-            float cx = (r[0] + r[2]) / 2f;
-            float cxn = cx + cfg.notifDx * den, top = r[1] + cfg.notifDy * den;
-            float px = (x - screen.left) / fx, py = (y - screen.top) / fy;
-            float defW = Math.max(1, r[2] - r[0]), defH = Math.max(1, r[3] - r[1]);
-            cfg.notifW = lim.clamp(Limits.NW, Math.round(2 * (px - cxn) / defW * 100f));
-            cfg.notifH = lim.clamp(Limits.NH, Math.round((py - top) / defH * 100f));
+            float uL = ((oL + (x - downX) / fx) * fx + ox) / cw, uW = oW * fx / cw;
+            float vT = ((oT + (y - downY) / fy) * fy + oy) / ch, vH = oH * fy / ch;
+            uL += edgeSnap(uL, uW);
+            vT += edgeSnap(vT, vH);
+            if (magnet) {
+                uL += pull(targets(true), new float[]{uL, uL + uW / 2f, uL + uW}, thX);
+                vT += pull(targets(false), new float[]{vT, vT + vH / 2f, vT + vH}, thY);
+            }
+            float newL = (uL * cw - ox) / fx, newT = (vT * ch - oy) / fy;
+            cfg.notifDx = lim.clamp(Limits.NDX, Math.round((newL + oW / 2f - cx) / den));
+            cfg.notifDy = lim.clamp(Limits.NDY, Math.round((newT - r[1]) / den));
+        } else { // resize: the top-left corner stays put, the bottom-right corner snaps
+            float px = (x - grabX - screen.left) / fx, py = (y - grabY - screen.top) / fy;
+            float ur = (px * fx + ox) / cw, vb = (py * fy + oy) / ch;
+            if (snap > 0) { ur = snapV(ur); vb = snapV(vb); }
+            if (magnet) {
+                ur += pull(targets(true), new float[]{ur}, thX);
+                vb += pull(targets(false), new float[]{vb}, thY);
+            }
+            float right = (ur * cw - ox) / fx, bottom = (vb * ch - oy) / fy;
+            cfg.notifW = lim.clamp(Limits.NW, Math.round((right - oL) / defW * 100f));
+            cfg.notifH = lim.clamp(Limits.NH, Math.round((bottom - oT) / defH * 100f));
+            float w = defW * cfg.notifW / 100f;
+            cfg.notifDx = lim.clamp(Limits.NDX, Math.round((oL + w / 2f - cx) / den)); // keeps the left edge in place
         }
+        if (guides) collectNotifGuides();
         if (cfg.notifW != oNW || cfg.notifH != oNH || cfg.notifDx != oNDx || cfg.notifDy != oNDy) dirty = true;
         invalidate();
     }
@@ -401,6 +458,8 @@ public class GridEditorView extends View {
                         && y > nv.bottom - hs && y < nv.bottom + hs / 2) {
                     nHit = true;
                     mode = NRESIZE;
+                    grabX = x - nv.right;
+                    grabY = y - nv.bottom;
                 } else {
                     if (sel != null) {
                         RectF r = rectOf(sel);

@@ -512,7 +512,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         inspector.addView(r1);
         inspector.addView(r2);
         TextView cap = new TextView(this);
-        cap.setText("Drag the box to move it, the corner handle to resize. W/H = size in %, X/Y = offset in dp.");
+        cap.setText("Drag the box to move it (it snaps to the grid), the corner handle to resize. W/H = size in %, X/Y = offset in dp.");
         cap.setTextColor(0xFFB8BCC8);
         cap.setTextSize(11);
         cap.setPadding(0, dp(4), 0, dp(6));
