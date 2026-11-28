@@ -115,6 +115,26 @@ public final class ConfigStore {
         for (File f : fs) if (!live.contains(f.getName())) f.delete();
     }
 
+    // ---- status flags reported by the SystemUI hook (shown in the Setup check) ----
+    public static synchronized void setFlag(Context c, String key, String value) {
+        if (key == null) return;
+        JSONObject f = flags(c);
+        try {
+            f.put(key, new JSONObject().put("v", value == null ? "" : value).put("t", System.currentTimeMillis()));
+        } catch (JSONException e) {
+            return;
+        }
+        prefs(c).edit().putString("flags", f.toString()).apply();
+    }
+
+    public static synchronized JSONObject flags(Context c) {
+        try {
+            return new JSONObject(prefs(c).getString("flags", "{}"));
+        } catch (JSONException e) {
+            return new JSONObject();
+        }
+    }
+
     // ---- diagnostics written by the SystemUI hook ----
     public static synchronized void appendLog(Context c, String line) {
         if (line == null) return;

@@ -27,6 +27,9 @@
             android:screenOrientation="portrait"
             android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
 
+        <activity android:name=".SetupActivity" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".BackupsActivity" android:exported="false" android:screenOrientation="portrait" />
+
         <provider
             android:name=".ConfigProvider"
             android:authorities="com.lockeditor.rs118.config"

@@ -25,10 +25,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -66,8 +68,10 @@ final class LockWidgetLayer {
         try {
             host.startListening();
             KeyguardHooks.dlog("widget host started");
+            KeyguardHooks.flag("host", "started");
         } catch (Throwable t) {
             KeyguardHooks.dlog("host.startListening failed: " + t);
+            KeyguardHooks.flag("host", "failed: " + t);
         }
     }
 
@@ -76,6 +80,7 @@ final class LockWidgetLayer {
         ViewParent p = statusView.getParent();
         if (!(p instanceof ViewGroup)) {
             KeyguardHooks.dlog("status view has no ViewGroup parent, cannot attach layer");
+            KeyguardHooks.flag("layer", "the status view has no parent view");
             return;
         }
         ViewGroup parent = (ViewGroup) p;
@@ -84,6 +89,7 @@ final class LockWidgetLayer {
             parent.addView(overlay, new ViewGroup.LayoutParams(-1, -1));
             KeyguardHooks.dlog("layer attached to " + parent.getClass().getName() + " ("
                     + parent.getWidth() + "x" + parent.getHeight() + ", children=" + parent.getChildCount() + ")");
+            KeyguardHooks.flag("layer", "ok");
         }
         sync(statusView);
     }
@@ -167,6 +173,7 @@ final class LockWidgetLayer {
                     if (!ok) {
                         try { host.deleteAppWidgetId(id); } catch (Throwable ignored) { }
                         KeyguardHooks.dlog("BIND DENIED for " + w.provider + " - enable the System Framework scope for Lock Editor in LSPosed, then reboot");
+                        KeyguardHooks.flag("bind", "denied");
                         requestGrant();
                         continue;
                     }
@@ -185,6 +192,7 @@ final class LockWidgetLayer {
                 hv.setTag(w);
                 overlay.addView(hv);
                 entries.put(w.uid, new Entry(w.uid, id, hv));
+                KeyguardHooks.flag("bind", "ok");
                 KeyguardHooks.dlog("widget view created (id " + id + ", cell " + w.col + "," + w.row + " span " + w.colSpan + "x" + w.rowSpan + ")");
 
                 if (needCfg) launchConfigure(info, id);
@@ -192,8 +200,25 @@ final class LockWidgetLayer {
                 KeyguardHooks.dlog("widget setup failed: " + t);
             }
         }
+        applyOrder(c);
         overlay.requestLayout();
         scheduleSnapshot(1500);
+    }
+
+    /** Makes the overlay's child order match the layer order from the editor (last widget = on top). */
+    private void applyOrder(Config c) {
+        List<View> want = new ArrayList<>();
+        for (Config.Widget w : c.widgets) {
+            Entry e = entries.get(w.uid);
+            if (e != null) want.add(e.view);
+        }
+        List<View> have = new ArrayList<>();
+        for (int i = 0; i < overlay.getChildCount(); i++) {
+            View v = overlay.getChildAt(i);
+            if (want.contains(v)) have.add(v);
+        }
+        if (have.equals(want)) return;
+        for (View v : want) v.bringToFront();
     }
 
     // ---------------- snapshots for the editor / home preview ----------------

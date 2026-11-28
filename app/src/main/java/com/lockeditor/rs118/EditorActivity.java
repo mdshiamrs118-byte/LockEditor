@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -22,6 +23,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -32,15 +34,23 @@ import java.util.UUID;
 /** Full-screen grid editor drawn over the current lock screen wallpaper. */
 public class EditorActivity extends Activity implements GridEditorView.Host {
     private static final int PANEL = 0xE616161E, ACC = 0xFF3B5BDB;
+    private static final float[] SNAPS = {1f, 0.5f, 0.25f, 0f}; // 0 = free
+    private static final int MAX_HISTORY = 60;
 
     private Config cfg;
     private GridEditorView editor;
     private SnapSync snaps;
+    private SharedPreferences uiPrefs;
     private FrameLayout root;
-    private LinearLayout inspector, toolbar;
+    private LinearLayout inspector, toolbar, topBar;
+    private TextView undoBtn, redoBtn, snapBtn, guideBtn;
     private float d;
     private int insetTop, insetBottom;
     private boolean inspectorTop;
+    private float snap = 1f;
+    private boolean guides = true;
+    private final ArrayDeque<String> undo = new ArrayDeque<>(), redo = new ArrayDeque<>();
+    private String cur; // layout state after the last committed change
     private final Map<String, AppWidgetProviderInfo> infos = new HashMap<>();
     private final Map<String, Drawable> previews = new HashMap<>();
     private final Map<String, String> labels = new HashMap<>();
@@ -52,7 +62,11 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         getWindow().getAttributes().layoutInDisplayCutoutMode =
                 android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         d = getResources().getDisplayMetrics().density;
+        uiPrefs = getSharedPreferences("lockeditor_ui", MODE_PRIVATE);
+        snap = uiPrefs.getFloat("snap", 1f);
+        guides = uiPrefs.getBoolean("guides", true);
         cfg = ConfigStore.load(this);
+        cur = state();
         for (AppWidgetProviderInfo i : AppWidgetManager.getInstance(this).getInstalledProviders())
             infos.put(i.provider.flattenToString(), i);
 
@@ -64,20 +78,43 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         snaps = new SnapSync(this, 2500, () -> editor.invalidate());
         editor.setMarginDp(0);
         editor.setConfig(cfg);
+        editor.setSnap(snap);
+        editor.setGuides(guides);
         root.addView(editor, new FrameLayout.LayoutParams(-1, -1));
 
-        // top bar
-        LinearLayout top = new LinearLayout(this);
-        top.setGravity(Gravity.CENTER_VERTICAL);
+        // top bar: row 1 = back / undo / redo / grid size, row 2 = snap + guides
+        topBar = new LinearLayout(this);
+        topBar.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout r1 = new LinearLayout(this);
+        r1.setGravity(Gravity.CENTER_VERTICAL);
         TextView back = chip("‹  Back");
         back.setOnClickListener(v -> finish());
-        top.addView(back);
+        r1.addView(back);
+        undoBtn = chip("↶");
+        undoBtn.setOnClickListener(v -> doUndo());
+        r1.addView(undoBtn, marginLp(dp(8)));
+        redoBtn = chip("↷");
+        redoBtn.setOnClickListener(v -> doRedo());
+        r1.addView(redoBtn, marginLp(dp(6)));
         View spacer = new View(this);
-        top.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
-        top.addView(chip(cfg.rows + " × " + cfg.cols + " grid"));
+        r1.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        r1.addView(chip(cfg.rows + " × " + cfg.cols));
+        topBar.addView(r1, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout r2 = new LinearLayout(this);
+        r2.setGravity(Gravity.END);
+        snapBtn = chip("");
+        snapBtn.setOnClickListener(v -> cycleSnap());
+        r2.addView(snapBtn);
+        guideBtn = chip("");
+        guideBtn.setOnClickListener(v -> toggleGuides());
+        r2.addView(guideBtn, marginLp(dp(6)));
+        LinearLayout.LayoutParams r2lp = new LinearLayout.LayoutParams(-1, -2);
+        r2lp.topMargin = dp(8);
+        topBar.addView(r2, r2lp);
         FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         tlp.setMargins(dp(12), dp(10), dp(12), 0);
-        root.addView(top, tlp);
+        root.addView(topBar, tlp);
+        refreshChips();
 
         // inspector (selected widget)
         inspector = new LinearLayout(this);
@@ -109,7 +146,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
             insetTop = Math.max(ins.getSystemWindowInsetTop(),
                     ins.getDisplayCutout() != null ? ins.getDisplayCutout().getSafeInsetTop() : 0);
             insetBottom = ins.getSystemWindowInsetBottom();
-            ((FrameLayout.LayoutParams) top.getLayoutParams()).topMargin = insetTop + dp(10);
+            ((FrameLayout.LayoutParams) topBar.getLayoutParams()).topMargin = insetTop + dp(10);
             ((FrameLayout.LayoutParams) toolbar.getLayoutParams()).bottomMargin = insetBottom + dp(20);
             placeInspector();
             return ins;
@@ -126,6 +163,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         // re-read on every resume: picks up a changed wallpaper
         WallpaperLoader.load(this, bmp -> { if (bmp != null) editor.setWallpaper(bmp); });
     }
+
     @Override protected void onPause() { snaps.stop(); super.onPause(); }
 
     @Override
@@ -143,6 +181,12 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
 
     private int dp(int v) { return Math.round(v * d); }
 
+    private LinearLayout.LayoutParams marginLp(int left) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = left;
+        return lp;
+    }
+
     private GradientDrawable rounded(int color, int radiusDp) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(color);
@@ -156,6 +200,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         t.setTextSize(13);
         t.setTextColor(Color.WHITE);
         t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
+        t.setGravity(Gravity.CENTER);
         t.setPadding(dp(14), dp(9), dp(14), dp(9));
         t.setBackground(rounded(PANEL, 18));
         return t;
@@ -177,16 +222,105 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         return t;
     }
 
+    private TextView miniChip(String s, View.OnClickListener l) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(12);
+        t.setTextColor(Color.WHITE);
+        t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(10), dp(7), dp(10), dp(7));
+        t.setBackground(rounded(0x33FFFFFF, 14));
+        t.setOnClickListener(l);
+        return t;
+    }
+
     private void save() {
         ConfigStore.saveLayout(this, cfg);
         editor.invalidate();
+    }
+
+    // ---------- undo / redo ----------
+    private String state() { return cfg.toJson(false).toString(); }
+
+    /** Call after every layout change: records history, saves, refreshes the panel. */
+    private void commit() {
+        String now = state();
+        if (!now.equals(cur)) {
+            undo.push(cur);
+            while (undo.size() > MAX_HISTORY) undo.removeLast();
+            redo.clear();
+            cur = now;
+        }
+        save();
+        rebuildInspector();
+        refreshChips();
+    }
+
+    private void doUndo() {
+        if (undo.isEmpty()) return;
+        redo.push(cur);
+        cur = undo.pop();
+        restore(cur);
+    }
+
+    private void doRedo() {
+        if (redo.isEmpty()) return;
+        undo.push(cur);
+        cur = redo.pop();
+        restore(cur);
+    }
+
+    private void restore(String s) {
+        Config t = Config.fromJson(s);
+        Config.Widget old = editor.getSelected();
+        String selUid = old != null ? old.uid : null;
+        cfg.widgets.clear();
+        cfg.widgets.addAll(t.widgets);
+        Config.Widget keep = null;
+        for (Config.Widget w : cfg.widgets) if (w.uid.equals(selUid)) keep = w;
+        editor.setSelected(keep);
+        save();
+        rebuildInspector();
+        refreshChips();
+    }
+
+    private void refreshChips() {
+        undoBtn.setAlpha(undo.isEmpty() ? 0.35f : 1f);
+        redoBtn.setAlpha(redo.isEmpty() ? 0.35f : 1f);
+        snapBtn.setText("Snap: " + snapLabel(snap));
+        guideBtn.setText("Guides: " + (guides ? "on" : "off"));
+    }
+
+    private static String snapLabel(float s) {
+        if (s == 1f) return "1";
+        if (s == 0.5f) return "½";
+        if (s == 0.25f) return "¼";
+        return "Free";
+    }
+
+    private void cycleSnap() {
+        int i = 0;
+        for (int k = 0; k < SNAPS.length; k++) if (SNAPS[k] == snap) i = k;
+        snap = SNAPS[(i + 1) % SNAPS.length];
+        uiPrefs.edit().putFloat("snap", snap).apply();
+        editor.setSnap(snap);
+        refreshChips();
+        rebuildInspector();
+    }
+
+    private void toggleGuides() {
+        guides = !guides;
+        uiPrefs.edit().putBoolean("guides", guides).apply();
+        editor.setGuides(guides);
+        refreshChips();
     }
 
     // ---------- inspector ----------
     private void placeInspector() {
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) inspector.getLayoutParams();
         lp.setMargins(dp(12), 0, dp(12), 0);
-        if (inspectorTop) { lp.gravity = Gravity.TOP; lp.topMargin = insetTop + dp(62); lp.bottomMargin = 0; }
+        if (inspectorTop) { lp.gravity = Gravity.TOP; lp.topMargin = insetTop + dp(104); lp.bottomMargin = 0; }
         else { lp.gravity = Gravity.BOTTOM; lp.bottomMargin = insetBottom + dp(90); lp.topMargin = 0; }
         inspector.setLayoutParams(lp);
     }
@@ -216,23 +350,57 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         r2.addView(mini("Height", w.rowSpan, 3), new LinearLayout.LayoutParams(0, -2, 1f));
         inspector.addView(r1);
         inspector.addView(r2);
+
+        // layers: the list order is the draw order, last = on top
+        int idx = cfg.widgets.indexOf(w), n = cfg.widgets.size();
+        LinearLayout lr = new LinearLayout(this);
+        lr.setGravity(Gravity.CENTER_VERTICAL);
+        lr.setPadding(0, dp(6), 0, 0);
+        TextView ll = new TextView(this);
+        ll.setText("Layer " + (idx + 1) + "/" + n);
+        ll.setTextColor(0xFFB8BCC8);
+        ll.setTextSize(12);
+        lr.addView(ll, new LinearLayout.LayoutParams(0, -2, 1f));
+        lr.addView(miniChip("Back", v -> layer(0)), marginLp(dp(6)));
+        lr.addView(miniChip("▼", v -> layer(1)), marginLp(dp(6)));
+        lr.addView(miniChip("▲", v -> layer(2)), marginLp(dp(6)));
+        lr.addView(miniChip("Front", v -> layer(3)), marginLp(dp(6)));
+        inspector.addView(lr);
     }
 
-    private View mini(String label, int value, final int field) {
+    private void layer(int op) { // 0 = send to back, 1 = one down, 2 = one up, 3 = bring to front
+        Config.Widget w = editor.getSelected();
+        if (w == null) return;
+        int i = cfg.widgets.indexOf(w), n = cfg.widgets.size(), j;
+        switch (op) {
+            case 0: j = 0; break;
+            case 1: j = Math.max(0, i - 1); break;
+            case 2: j = Math.min(n - 1, i + 1); break;
+            default: j = n - 1;
+        }
+        if (i < 0 || j == i) return;
+        cfg.widgets.remove(i);
+        cfg.widgets.add(j, w);
+        commit();
+    }
+
+    private String fmtPos(float v) { return Config.fmt(v); }
+
+    private View mini(String label, float value, final int field) {
         LinearLayout r = new LinearLayout(this);
         r.setGravity(Gravity.CENTER_VERTICAL);
         TextView l = new TextView(this);
         l.setText(label);
         l.setTextColor(0xFFB8BCC8);
         l.setTextSize(12);
-        r.addView(l, new LinearLayout.LayoutParams(dp(46), -2));
+        r.addView(l, new LinearLayout.LayoutParams(dp(42), -2));
         r.addView(step("−", field, -1));
         TextView v = new TextView(this);
-        v.setText(String.valueOf(value));
+        v.setText(fmtPos(value));
         v.setTextColor(Color.WHITE);
-        v.setTextSize(15);
+        v.setTextSize(14);
         v.setGravity(Gravity.CENTER);
-        r.addView(v, new LinearLayout.LayoutParams(dp(30), -2));
+        r.addView(v, new LinearLayout.LayoutParams(dp(40), -2));
         r.addView(step("+", field, 1));
         return r;
     }
@@ -244,24 +412,27 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         t.setTextSize(18);
         t.setGravity(Gravity.CENTER);
         t.setBackground(rounded(0x33FFFFFF, 18));
-        t.setLayoutParams(new LinearLayout.LayoutParams(dp(36), dp(36)));
+        t.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
         t.setOnClickListener(v -> adjust(field, delta));
         return t;
     }
 
-    private static int cl(int v, int lo, int hi) { return Math.max(lo, Math.min(hi, v)); }
+    private float stepSize() { return snap > 0 ? snap : 0.1f; }
+    private float minSpan() { return snap > 0 ? snap : Config.MIN_SPAN; }
+    private static float r3(float v) { return Math.round(v * 1000f) / 1000f; }
+    private static float clf(float v, float lo, float hi) { return Math.max(lo, Math.min(hi, v)); }
 
     private void adjust(int field, int delta) {
         Config.Widget w = editor.getSelected();
         if (w == null) return;
+        float s = delta * stepSize();
         switch (field) {
-            case 0: w.col = cl(w.col + delta, 0, cfg.cols - w.colSpan); break;
-            case 1: w.row = cl(w.row + delta, 0, cfg.rows - w.rowSpan); break;
-            case 2: w.colSpan = cl(w.colSpan + delta, 1, cfg.cols - w.col); break;
-            default: w.rowSpan = cl(w.rowSpan + delta, 1, cfg.rows - w.row);
+            case 0: w.col = clf(r3(w.col + s), 0, cfg.cols - w.colSpan); break;
+            case 1: w.row = clf(r3(w.row + s), 0, cfg.rows - w.rowSpan); break;
+            case 2: w.colSpan = clf(r3(w.colSpan + s), minSpan(), cfg.cols - w.col); break;
+            default: w.rowSpan = clf(r3(w.rowSpan + s), minSpan(), cfg.rows - w.row);
         }
-        save();
-        rebuildInspector();
+        commit();
     }
 
     // ---------- widgets ----------
@@ -323,8 +494,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         cfg.widgets.add(w);
         infos.put(w.provider, info);
         editor.setSelected(w);
-        save();
-        rebuildInspector();
+        commit();
     }
 
     private void deleteSelected() {
@@ -332,8 +502,7 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
         if (w == null) { Toast.makeText(this, "Select a widget first", Toast.LENGTH_SHORT).show(); return; }
         cfg.widgets.remove(w);
         editor.setSelected(null);
-        save();
-        rebuildInspector();
+        commit();
     }
 
     private void configureSelected() {
@@ -372,6 +541,6 @@ public class EditorActivity extends Activity implements GridEditorView.Host {
     }
 
     @Override public Bitmap snapshot(String uid) { return snaps != null ? snaps.get(uid) : null; }
-    @Override public void onChanged() { save(); rebuildInspector(); }
+    @Override public void onChanged() { commit(); }
     @Override public void onSelected(Config.Widget w) { rebuildInspector(); }
 }

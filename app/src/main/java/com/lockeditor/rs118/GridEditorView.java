@@ -3,6 +3,7 @@ package com.lockeditor.rs118;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
@@ -12,7 +13,14 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
-/** Grid canvas: tap to select, drag to move (snaps to cells), drag the corner handle to resize. */
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Grid canvas: tap to select, drag to move, drag the corner handle to resize.
+ * Positions snap to a step (1, 1/2, 1/4 cell, or none) and, when guides are on, align magnetically
+ * with the edges and centers of other widgets and of the grid area.
+ */
 public class GridEditorView extends View {
 
     public interface Host {
@@ -27,18 +35,17 @@ public class GridEditorView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF area = new RectF();   // widget grid area (screen minus top/bottom inset)
     private final RectF screen = new RectF(); // the whole phone screen, same aspect as the real display
-    private float cornerDp;
     private final DisplayMetrics real = new DisplayMetrics();
     private final float dp;
+    private final List<Float> gx = new ArrayList<>(), gy = new ArrayList<>(); // active guide lines, in cells
     private Config cfg = new Config();
     private Host host;
     private Config.Widget sel;
     private Bitmap wallpaper;
-    private boolean light, interactive = true;
-    private float marginDp = 8;
+    private boolean light, interactive = true, guides = true;
+    private float marginDp = 8, cornerDp, snap = 1f; // snap: step in cells, 0 = free
     private int mode;
-    private float downX, downY;
-    private int oRow, oCol, oRs, oCs;
+    private float downX, downY, oRow, oCol, oRs, oCs;
     private boolean dirty;
 
     public GridEditorView(Context c) {
@@ -50,17 +57,20 @@ public class GridEditorView extends View {
             ((WindowManager) c.getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(real);
         } catch (Throwable t) {
             real.widthPixels = 1080;
+            real.heightPixels = 2340;
             real.density = dp;
         }
     }
 
     public void setHost(Host h) { host = h; }
     public void setConfig(Config c) { cfg = c; sel = null; invalidate(); }
-    public void setCornerDp(float c) { cornerDp = c; invalidate(); }
     public void setLight(boolean l) { light = l; invalidate(); }
     public void setInteractive(boolean i) { interactive = i; }
     public void setMarginDp(float m) { marginDp = m; invalidate(); }
+    public void setCornerDp(float c) { cornerDp = c; invalidate(); }
     public void setWallpaper(Bitmap b) { wallpaper = b; invalidate(); }
+    public void setSnap(float s) { snap = s; invalidate(); }
+    public void setGuides(boolean g) { guides = g; invalidate(); }
     public Config.Widget getSelected() { return sel; }
     public void setSelected(Config.Widget w) { sel = w; invalidate(); }
 
@@ -124,7 +134,7 @@ public class GridEditorView extends View {
             for (int i = 0; i <= cfg.rows; i++) c.drawLine(area.left, area.top + i * ch, area.right, area.top + i * ch, paint);
         }
 
-        for (Config.Widget w : cfg.widgets) {
+        for (Config.Widget w : cfg.widgets) { // list order = layer order, last is on top
             RectF r = rectOf(w);
             r.inset(2 * dp, 2 * dp);
             boolean s = w == sel;
@@ -170,7 +180,8 @@ public class GridEditorView extends View {
                 if (!light) paint.setShadowLayer(2 * dp, 0, 0, 0xFF000000);
                 String label = host != null ? host.label(w.provider) : w.provider;
                 paint.setTextSize((light ? 9 : 12) * dp);
-                c.drawText(label + (light ? "" : "  " + w.colSpan + "×" + w.rowSpan), r.left + 4 * dp, r.top + (light ? 11 : 14) * dp, paint);
+                c.drawText(label + (light ? "" : "  " + Config.fmt(w.colSpan) + "×" + Config.fmt(w.rowSpan)),
+                        r.left + 4 * dp, r.top + (light ? 11 : 14) * dp, paint);
                 paint.clearShadowLayer();
                 c.restore();
             }
@@ -180,6 +191,22 @@ public class GridEditorView extends View {
                 paint.setColor(accent);
                 c.drawRoundRect(new RectF(r.right - 14 * dp, r.bottom - 14 * dp, r.right, r.bottom), 3 * dp, 3 * dp, paint);
             }
+        }
+
+        if (!gx.isEmpty() || !gy.isEmpty()) { // alignment guides while dragging
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(1.5f * dp);
+            paint.setColor(0xFFFF4081);
+            paint.setPathEffect(new DashPathEffect(new float[]{8 * dp, 5 * dp}, 0));
+            for (float t : gx) {
+                float x = area.left + t * cw;
+                c.drawLine(x, screen.top, x, screen.bottom, paint);
+            }
+            for (float t : gy) {
+                float y = area.top + t * ch;
+                c.drawLine(screen.left, y, screen.right, y, paint);
+            }
+            paint.setPathEffect(null);
         }
         c.restore();
         if (corner > 0 && light) {
@@ -198,7 +225,47 @@ public class GridEditorView extends View {
         invalidate();
     }
 
-    private static int clamp(int v, int lo, int hi) { return Math.max(lo, Math.min(v, hi)); }
+    private static float clampF(float v, float lo, float hi) { return Math.max(lo, Math.min(v, hi)); }
+    private float snapV(float v) { return snap > 0 ? Math.round(v / snap) * snap : v; }
+    private float minSpan() { return snap > 0 ? snap : Config.MIN_SPAN; }
+
+    /** Alignment targets along one axis: grid edges/center and edges/centers of the other widgets. */
+    private List<Float> targets(boolean xAxis) {
+        List<Float> t = new ArrayList<>();
+        float n = xAxis ? cfg.cols : cfg.rows;
+        t.add(0f);
+        t.add(n / 2f);
+        t.add(n);
+        for (Config.Widget o : cfg.widgets) {
+            if (o == sel) continue;
+            float p = xAxis ? o.col : o.row, s = xAxis ? o.colSpan : o.rowSpan;
+            t.add(p);
+            t.add(p + s / 2f);
+            t.add(p + s);
+        }
+        return t;
+    }
+
+    /** Smallest correction that lines one of the edges up with a target (0 if none is within thr). */
+    private static float pull(List<Float> targets, float[] edges, float thr) {
+        float best = 0, bestAbs = thr;
+        for (float t : targets) for (float e : edges) {
+            float diff = t - e;
+            if (Math.abs(diff) < bestAbs) { bestAbs = Math.abs(diff); best = diff; }
+        }
+        return best;
+    }
+
+    private void collectGuides() {
+        gx.clear();
+        gy.clear();
+        float[] ex = mode == MOVE ? new float[]{sel.col, sel.col + sel.colSpan / 2f, sel.col + sel.colSpan}
+                : new float[]{sel.col + sel.colSpan};
+        float[] ey = mode == MOVE ? new float[]{sel.row, sel.row + sel.rowSpan / 2f, sel.row + sel.rowSpan}
+                : new float[]{sel.row + sel.rowSpan};
+        for (float t : targets(true)) for (float e : ex) if (Math.abs(t - e) < 0.01f && !gx.contains(t)) gx.add(t);
+        for (float t : targets(false)) for (float e : ey) if (Math.abs(t - e) < 0.01f && !gy.contains(t)) gy.add(t);
+    }
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
@@ -218,7 +285,7 @@ public class GridEditorView extends View {
                     }
                 }
                 if (hit == null) {
-                    for (int i = cfg.widgets.size() - 1; i >= 0; i--) {
+                    for (int i = cfg.widgets.size() - 1; i >= 0; i--) { // topmost layer first
                         Config.Widget w = cfg.widgets.get(i);
                         if (rectOf(w).contains(x, y)) { hit = w; mode = MOVE; break; }
                     }
@@ -234,20 +301,41 @@ public class GridEditorView extends View {
             case MotionEvent.ACTION_MOVE: {
                 if (sel == null || mode == NONE) return true;
                 float cw = area.width() / cfg.cols, ch = area.height() / cfg.rows;
-                int dc = Math.round((x - downX) / cw), dr = Math.round((y - downY) / ch);
+                float dc = (x - downX) / cw, dr = (y - downY) / ch;
+                boolean magnet = guides && snap != 1f; // with whole-cell snapping the grid itself is the guide
+                float thX = 6 * dp / cw, thY = 6 * dp / ch;
                 if (mode == MOVE) {
-                    sel.col = clamp(oCol + dc, 0, cfg.cols - sel.colSpan);
-                    sel.row = clamp(oRow + dr, 0, cfg.rows - sel.rowSpan);
+                    float c = clampF(snapV(oCol + dc), 0, cfg.cols - sel.colSpan);
+                    float r = clampF(snapV(oRow + dr), 0, cfg.rows - sel.rowSpan);
+                    if (magnet) {
+                        c = clampF(c + pull(targets(true), new float[]{c, c + sel.colSpan / 2f, c + sel.colSpan}, thX),
+                                0, cfg.cols - sel.colSpan);
+                        r = clampF(r + pull(targets(false), new float[]{r, r + sel.rowSpan / 2f, r + sel.rowSpan}, thY),
+                                0, cfg.rows - sel.rowSpan);
+                    }
+                    sel.col = c;
+                    sel.row = r;
                 } else {
-                    sel.colSpan = clamp(oCs + dc, 1, cfg.cols - sel.col);
-                    sel.rowSpan = clamp(oRs + dr, 1, cfg.rows - sel.row);
+                    float cs = clampF(snapV(oCs + dc), minSpan(), cfg.cols - sel.col);
+                    float rs = clampF(snapV(oRs + dr), minSpan(), cfg.rows - sel.row);
+                    if (magnet) {
+                        cs = clampF(cs + pull(targets(true), new float[]{sel.col + cs}, thX), minSpan(), cfg.cols - sel.col);
+                        rs = clampF(rs + pull(targets(false), new float[]{sel.row + rs}, thY), minSpan(), cfg.rows - sel.row);
+                    }
+                    sel.colSpan = cs;
+                    sel.rowSpan = rs;
                 }
-                if (sel.col != oCol || sel.row != oRow || sel.colSpan != oCs || sel.rowSpan != oRs) dirty = true;
+                if (guides) collectGuides();
+                if (Math.abs(sel.col - oCol) > 1e-4f || Math.abs(sel.row - oRow) > 1e-4f
+                        || Math.abs(sel.colSpan - oCs) > 1e-4f || Math.abs(sel.rowSpan - oRs) > 1e-4f) dirty = true;
                 invalidate();
                 return true;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                gx.clear();
+                gy.clear();
+                invalidate();
                 if (dirty && host != null) host.onChanged();
                 dirty = false;
                 mode = NONE;

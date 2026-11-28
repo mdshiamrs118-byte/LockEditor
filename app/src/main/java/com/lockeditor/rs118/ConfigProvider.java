@@ -40,6 +40,7 @@ public class ConfigProvider extends ContentProvider {
         final Context c = getContext();
         Bundle out = new Bundle();
         if ("get".equals(method)) {
+            ConfigStore.setFlag(c, "hook", "ok"); // SystemUI is alive and talking to us
             Config cfg = ConfigStore.load(c);
             cfg.orphans.addAll(ConfigStore.popOrphans(c, cfg));
             out.putString("json", cfg.toJson(true).toString());
@@ -47,6 +48,8 @@ public class ConfigProvider extends ContentProvider {
             ConfigStore.setRuntime(c, arg, extras.getInt("id", -1), extras.getBoolean("configured"));
         } else if ("log".equals(method)) {
             ConfigStore.appendLog(c, arg);
+        } else if ("flag".equals(method)) {
+            ConfigStore.setFlag(c, arg, extras != null ? extras.getString("v") : "");
         } else if ("snap_done".equals(method)) {
             ConfigStore.notifySnapDone(c);
         } else if ("bind_denied".equals(method) && grantDue()) {

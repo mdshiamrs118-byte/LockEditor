@@ -25,6 +25,8 @@ public final class WallpaperLoader {
 
     private static final String DIR = "/data/system/users/0/";
     private static final String[] FILES = {"wallpaper_lock", "wallpaper", "wallpaper_lock_orig", "wallpaper_orig"};
+    /** Where the last wallpaper came from, for the Setup check. */
+    public static volatile String lastSource;
     private static Bitmap cached;
     private static String cachedSig;
 
@@ -42,6 +44,7 @@ public final class WallpaperLoader {
                         b = fromRoot(a, sig);
                         if (b == null) {
                             b = fromManager(a);
+                            lastSource = "WallpaperManager, root read failed";
                             ConfigStore.appendLog(a, "wallpaper: root read failed, used WallpaperManager (files: " + sig + ")");
                             sig = null; // no signature -> never cache
                         }
@@ -125,6 +128,7 @@ public final class WallpaperLoader {
                 o.inSampleSize = s;
                 Bitmap b = BitmapFactory.decodeByteArray(data, 0, data.length, o);
                 if (b != null) {
+                    lastSource = "root: " + name + " " + w + "x" + h;
                     ConfigStore.appendLog(a, "wallpaper: using " + name + " (" + w + "x" + h + "); files: "
                             + (sig == null ? "?" : sig.replace(DIR, "").replace("\n", " | ")));
                     return b;

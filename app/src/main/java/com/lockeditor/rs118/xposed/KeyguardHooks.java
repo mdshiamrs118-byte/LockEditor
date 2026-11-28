@@ -100,6 +100,7 @@ final class KeyguardHooks {
                     String n = v.getClass().getName();
                     if (n.equals("com.android.keyguard.KeyguardStatusView")) onStatusView((ViewGroup) v);
                     else if (n.equals("com.android.systemui.statusbar.phone.KeyguardBottomAreaView")) onBottomArea((ViewGroup) v);
+                    else detectStock(v, n);
                 } catch (Throwable t) {
                     XposedBridge.log(t);
                 }
@@ -166,10 +167,61 @@ final class KeyguardHooks {
         }
     }
 
+    // ---------------- status flags for the app's Setup check ----------------
+    static void flag(final String key, final String value) {
+        final Context c = logCtx;
+        if (c == null) return;
+        IO.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    Bundle b = new Bundle();
+                    b.putString("v", value);
+                    c.getContentResolver().call(URI, "flag", key, b);
+                } catch (Throwable ignored) { }
+            }
+        });
+    }
+
+    // ---------------- extra stock elements (lock icon, hints, carrier, status bar) ----------------
+    private static final java.util.Set<String> stockFound = new java.util.TreeSet<>();
+
+    private static void detectStock(View v, String cls) {
+        String cat = null;
+        if (cls.endsWith(".LockIcon")) cat = "lockicon";
+        else if (cls.endsWith(".KeyguardStatusBarView")) cat = "statusbar";
+        else {
+            int id = v.getId();
+            if (id != View.NO_ID && (id >>> 24) == 0x7f) { // SystemUI's own resources only
+                try {
+                    switch (v.getResources().getResourceEntryName(id)) {
+                        case "lock_icon": cat = "lockicon"; break;
+                        case "keyguard_indication_area": cat = "hint"; break;
+                        case "keyguard_carrier_text": cat = "carrier"; break;
+                        default: break;
+                    }
+                } catch (Throwable ignored) { }
+            }
+        }
+        if (cat == null) return;
+        register(v, cat);
+        boolean first;
+        String joined;
+        synchronized (stockFound) {
+            first = stockFound.add(cat);
+            joined = android.text.TextUtils.join(",", stockFound);
+        }
+        if (first) {
+            dlog("stock element found: " + cat + " (" + cls + ")");
+            flag("stock", joined);
+        }
+        applyHidden();
+    }
+
     // ---------------- view discovery ----------------
     private static void onStatusView(final ViewGroup sv) {
         Context ctx = sv.getContext();
         dlog("KeyguardStatusView attached (parent=" + (sv.getParent() == null ? "null" : sv.getParent().getClass().getName()) + ")");
+        flag("statusview", "ok");
         registerClockViews(sv);
         if (layer == null) layer = new LockWidgetLayer(ctx);
         final LockWidgetLayer l = layer;
@@ -260,6 +312,7 @@ final class KeyguardHooks {
                 if (!found.isEmpty()) n = found.get(0);
             }
             notifRef = new WeakReference<>(n);
+            flag("notif", n == null ? "missing" : "ok");
             if (n == null) {
                 if (!notifMissingLogged) {
                     notifMissingLogged = true;
@@ -294,6 +347,10 @@ final class KeyguardHooks {
             case "clock": return c.hideClock;
             case "date": return c.hideDate;
             case "shortcut": return c.hideShortcuts;
+            case "lockicon": return c.hideLockIcon;
+            case "hint": return c.hideHints;
+            case "carrier": return c.hideCarrier;
+            case "statusbar": return c.hideStatusBar;
             default: return false;
         }
     }

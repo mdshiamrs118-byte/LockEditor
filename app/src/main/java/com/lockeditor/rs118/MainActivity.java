@@ -1,6 +1,5 @@
 package com.lockeditor.rs118;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
@@ -9,7 +8,6 @@ import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.DisplayMetrics;
@@ -20,26 +18,20 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
-import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
-public class MainActivity extends Activity implements GridEditorView.Host {
-    private static final int BG = 0xFFEDF0F7, ACC = 0xFF3B5BDB, TXT = 0xFF1B1F29, SUB = 0xFF5B6475, TRACK = 0xFFE6EAF4;
-    private static final int PAD = 12, GAP = 10, CARD_PAD = 14;
-
+public class MainActivity extends BaseActivity implements GridEditorView.Host {
     private Config cfg;
     private Limits lim;
-    private float d;
     private GridEditorView preview;
     private SnapSync snaps;
     private TextView widgetInfo;
+    private LinearLayout backupsCard;
     private boolean built;
     private final Map<String, AppWidgetProviderInfo> infos = new HashMap<>();
     private final Map<String, Drawable> previews = new HashMap<>();
@@ -48,7 +40,6 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        d = getResources().getDisplayMetrics().density;
         cfg = ConfigStore.load(this);
         lim = Limits.load(this);
         for (AppWidgetProviderInfo i : AppWidgetManager.getInstance(this).getInstalledProviders())
@@ -60,7 +51,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     @Override
     protected void onResume() {
         super.onResume();
-        if (built) { // widgets may have changed in the editor
+        if (built) { // widgets may have changed in the editor, or a backup was restored
             cfg = ConfigStore.load(this);
             preview.setConfig(cfg);
             refreshInfo();
@@ -76,95 +67,39 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         super.onPause();
     }
 
-    private int dp(int v) { return Math.round(v * d); }
-
     private void save() {
         ConfigStore.saveLayout(this, cfg);
         if (preview != null) preview.invalidate();
         refreshInfo();
     }
 
-    private void updateAspect() {
-        if (preview != null) preview.invalidate(); // insets changed: the grid area is recomputed on draw
-    }
-
     private void refreshInfo() {
-        if (widgetInfo == null) return;
-        int n = cfg.widgets.size();
-        widgetInfo.setText(n + (n == 1 ? " widget" : " widgets"));
+        if (widgetInfo != null) {
+            int n = cfg.widgets.size();
+            widgetInfo.setText(n + (n == 1 ? " widget" : " widgets"));
+        }
+        if (backupsCard != null) {
+            TextView s = backupsCard.findViewWithTag("sub");
+            if (s != null) s.setText(BackupStore.list(this).size() + " saved");
+        }
     }
 
     // ---------- building blocks ----------
-    private GradientDrawable rounded(int color, int radiusDp) {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(color);
-        g.setCornerRadius(dp(radiusDp));
-        return g;
-    }
-
-    private TextView text(String s, int sizeSp, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(sizeSp);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
-        return t;
-    }
-
-    private LinearLayout card(String heading) {
-        LinearLayout c = new LinearLayout(this);
-        c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(CARD_PAD), dp(CARD_PAD), dp(CARD_PAD), dp(CARD_PAD - 4));
-        c.setBackground(rounded(Color.WHITE, 24));
-        c.setElevation(d * 1.5f);
-        if (heading != null) {
-            TextView h = text(heading.toUpperCase(Locale.ROOT), 11, SUB, true);
-            h.setLetterSpacing(0.08f);
-            h.setPadding(dp(2), 0, 0, dp(8));
-            c.addView(h);
-        }
+    private LinearLayout actionCard(String title, String sub, View.OnClickListener l) {
+        LinearLayout c = card(null);
+        c.setPadding(dp(CARD_PAD), dp(12), dp(CARD_PAD), dp(12));
+        c.setOnClickListener(l);
+        c.addView(text(title, 14, ui.txt, true));
+        TextView s = text(sub, 12, ui.sub, false);
+        s.setTag("sub");
+        c.addView(s);
         return c;
     }
 
-    /** Adds a card to a column with the gap below it. */
-    private void put(LinearLayout col, View card) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = dp(GAP);
-        col.addView(card, lp);
-    }
-
-    private LinearLayout rowBase() {
-        LinearLayout r = new LinearLayout(this);
-        r.setGravity(Gravity.CENTER_VERTICAL);
-        r.setMinimumHeight(dp(40));
-        return r;
-    }
-
-    private View switchRow(String label, boolean init, Consumer<Boolean> cb) {
-        LinearLayout r = rowBase();
-        TextView t = text(label, 14, TXT, false);
-        Switch sw = new Switch(this);
-        sw.setThumbTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{ACC, Color.WHITE}));
-        sw.setTrackTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{0x883B5BDB, 0xFFC9CED8}));
-        sw.setChecked(init);
-        sw.setOnCheckedChangeListener((v, on) -> cb.accept(on));
-        r.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
-        r.addView(sw);
-        return r;
-    }
-
-    private View tapRow(String label, View.OnClickListener l) {
-        LinearLayout r = rowBase();
-        r.addView(text(label, 14, TXT, false), new LinearLayout.LayoutParams(0, -2, 1f));
-        r.addView(text("›", 18, SUB, false));
-        r.setOnClickListener(l);
-        return r;
-    }
-
     private TextView circleBtn(String s, View.OnClickListener l) {
-        TextView t = text(s, 20, ACC, true);
+        TextView t = text(s, 20, ui.acc, true);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(rounded(TRACK, 20));
+        t.setBackground(rounded(ui.track, 20));
         t.setOnClickListener(l);
         t.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
         return t;
@@ -176,10 +111,10 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, dp(2), 0, dp(6));
-        box.addView(text(label, 12, SUB, false));
+        box.addView(text(label, 12, ui.sub, false));
         LinearLayout r = new LinearLayout(this);
         r.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView v = text(String.valueOf(val[0]), 17, TXT, true);
+        final TextView v = text(String.valueOf(val[0]), 17, ui.txt, true);
         v.setGravity(Gravity.CENTER);
         r.addView(circleBtn("−", x -> { if (val[0] > min) { val[0]--; v.setText(String.valueOf(val[0])); cb.accept(val[0]); } }));
         r.addView(v, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -196,14 +131,14 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         box.setPadding(0, dp(4), 0, 0);
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView val = text(start + unit, 12, SUB, false);
-        head.addView(text(label, 13, TXT, false), new LinearLayout.LayoutParams(0, -2, 1f));
+        final TextView val = text(start + unit, 12, ui.sub, false);
+        head.addView(text(label, 13, ui.txt, false), new LinearLayout.LayoutParams(0, -2, 1f));
         head.addView(val);
         SeekBar s = new SeekBar(this);
         s.setMax(max - min);
         s.setProgress(start - min);
-        s.setProgressTintList(ColorStateList.valueOf(ACC));
-        s.setThumbTintList(ColorStateList.valueOf(ACC));
+        s.setProgressTintList(ColorStateList.valueOf(ui.acc));
+        s.setThumbTintList(ColorStateList.valueOf(ui.acc));
         s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar sb, int p, boolean user) {
                 val.setText((p + min) + unit);
@@ -220,16 +155,29 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     // ---------- screen ----------
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(BG);
+        scroll.setBackgroundColor(ui.bg);
         scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(PAD), dp(28), dp(PAD), dp(PAD));
         scroll.addView(root);
 
-        TextView title = text("Lock Editor", 30, TXT, true);
+        TextView title = text("Lock Editor", 30, ui.txt, true);
         title.setPadding(dp(6), 0, 0, dp(14));
         root.addView(title);
+
+        // quick actions: setup check + backups
+        LinearLayout quick = new LinearLayout(this);
+        LinearLayout setupCard = actionCard("Setup check", "Verify everything works",
+                v -> startActivity(new Intent(this, SetupActivity.class)));
+        backupsCard = actionCard("Backups", "", v -> startActivity(new Intent(this, BackupsActivity.class)));
+        LinearLayout.LayoutParams q1 = new LinearLayout.LayoutParams(0, -2, 1f);
+        q1.rightMargin = dp(GAP / 2);
+        LinearLayout.LayoutParams q2 = new LinearLayout.LayoutParams(0, -2, 1f);
+        q2.leftMargin = dp(GAP / 2);
+        quick.addView(setupCard, q1);
+        quick.addView(backupsCard, q2);
+        put(root, quick);
 
         // two columns; cards inside each column take the height of their content
         LinearLayout cols = new LinearLayout(this);
@@ -254,7 +202,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         int innerH = Math.round(innerW * (real.heightPixels / (float) Math.max(1, real.widthPixels)));
         preview = new GridEditorView(this);
         preview.setHost(this);
-        preview.setLight(true);
+        preview.setLight(!ui.dark);
         preview.setInteractive(false);
         preview.setMarginDp(0);
         preview.setCornerDp(16);
@@ -263,18 +211,36 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         wrap.addView(preview, new FrameLayout.LayoutParams(-1, -1));
         wrap.setOnClickListener(v -> startActivity(new Intent(this, EditorActivity.class)));
         pc.addView(wrap, new LinearLayout.LayoutParams(innerW, innerH));
-        widgetInfo = text("", 12, SUB, false);
+        widgetInfo = text("", 12, ui.sub, false);
         widgetInfo.setGravity(Gravity.CENTER);
         widgetInfo.setPadding(0, dp(8), 0, dp(8));
         pc.addView(widgetInfo, new LinearLayout.LayoutParams(-1, -2));
-        TextView edit = text("Edit layout", 14, Color.WHITE, true);
-        edit.setGravity(Gravity.CENTER);
-        edit.setBackground(rounded(ACC, 18));
-        edit.setOnClickListener(v -> startActivity(new Intent(this, EditorActivity.class)));
+        TextView edit = button("Edit layout", true, v -> startActivity(new Intent(this, EditorActivity.class)));
+        edit.setTextSize(14);
         pc.addView(edit, new LinearLayout.LayoutParams(-1, dp(44)));
         put(left, pc);
 
-        // ---- left bottom: notification list ----
+        // ---- left bottom: hide stock elements ----
+        LinearLayout hc = card("Hide stock");
+        hc.addView(switchRow("Clock", cfg.hideClock, v -> { cfg.hideClock = v; save(); }));
+        hc.addView(switchRow("Date", cfg.hideDate, v -> { cfg.hideDate = v; save(); }));
+        hc.addView(switchRow("Notifications", cfg.hideNotifs, v -> { cfg.hideNotifs = v; save(); }));
+        hc.addView(switchRow("Shortcuts", cfg.hideShortcuts, v -> { cfg.hideShortcuts = v; save(); }));
+        hc.addView(switchRow("Lock icon", cfg.hideLockIcon, v -> { cfg.hideLockIcon = v; save(); }));
+        hc.addView(switchRow("Hints", cfg.hideHints, v -> { cfg.hideHints = v; save(); }));
+        hc.addView(switchRow("Carrier name", cfg.hideCarrier, v -> { cfg.hideCarrier = v; save(); }));
+        hc.addView(switchRow("Status bar", cfg.hideStatusBar, v -> { cfg.hideStatusBar = v; save(); }));
+        put(left, hc);
+
+        // ---- right top: grid and area ----
+        LinearLayout gc = card("Grid and area");
+        gc.addView(stepper("Rows", cfg.rows, lim.min[Limits.ROWS], lim.max[Limits.ROWS], v -> { cfg.rows = v; cfg.clamp(); save(); }));
+        gc.addView(stepper("Columns", cfg.cols, lim.min[Limits.COLS], lim.max[Limits.COLS], v -> { cfg.cols = v; cfg.clamp(); save(); }));
+        gc.addView(slider("Top inset", cfg.insetTop, lim.min[Limits.ITOP], lim.max[Limits.ITOP], "dp", v -> { cfg.insetTop = v; preview.invalidate(); }));
+        gc.addView(slider("Bottom inset", cfg.insetBottom, lim.min[Limits.IBOT], lim.max[Limits.IBOT], "dp", v -> { cfg.insetBottom = v; preview.invalidate(); }));
+        put(right, gc);
+
+        // ---- right middle: notification list ----
         LinearLayout nc = card("Notification list");
         nc.addView(slider("Width", cfg.notifW, lim.min[Limits.NW], lim.max[Limits.NW], "%", v -> cfg.notifW = v));
         nc.addView(slider("Height", cfg.notifH, lim.min[Limits.NH], lim.max[Limits.NH], "%", v -> cfg.notifH = v));
@@ -285,28 +251,13 @@ public class MainActivity extends Activity implements GridEditorView.Host {
             save();
             recreate();
         }));
-        put(left, nc);
-
-        // ---- right top: grid and area ----
-        LinearLayout gc = card("Grid and area");
-        gc.addView(stepper("Rows", cfg.rows, lim.min[Limits.ROWS], lim.max[Limits.ROWS], v -> { cfg.rows = v; cfg.clamp(); save(); }));
-        gc.addView(stepper("Columns", cfg.cols, lim.min[Limits.COLS], lim.max[Limits.COLS], v -> { cfg.cols = v; cfg.clamp(); save(); }));
-        gc.addView(slider("Top inset", cfg.insetTop, lim.min[Limits.ITOP], lim.max[Limits.ITOP], "dp", v -> { cfg.insetTop = v; updateAspect(); }));
-        gc.addView(slider("Bottom inset", cfg.insetBottom, lim.min[Limits.IBOT], lim.max[Limits.IBOT], "dp", v -> { cfg.insetBottom = v; updateAspect(); }));
-        put(right, gc);
-
-        // ---- right middle: hide stock elements ----
-        LinearLayout hc = card("Hide stock");
-        hc.addView(switchRow("Clock", cfg.hideClock, v -> { cfg.hideClock = v; save(); }));
-        hc.addView(switchRow("Date", cfg.hideDate, v -> { cfg.hideDate = v; save(); }));
-        hc.addView(switchRow("Notifications", cfg.hideNotifs, v -> { cfg.hideNotifs = v; save(); }));
-        hc.addView(switchRow("Shortcuts", cfg.hideShortcuts, v -> { cfg.hideShortcuts = v; save(); }));
-        put(right, hc);
+        put(right, nc);
 
         // ---- right bottom: tools ----
         LinearLayout tc = card("Tools");
         tc.addView(tapRow("Status log", v -> showLog()));
         tc.addView(switchRow("Debug marker", cfg.debug, v -> { cfg.debug = v; save(); }));
+        tc.addView(tapRow("Theme: " + themeName(Ui.mode(this)), v -> showTheme()));
         tc.addView(tapRow("Restart SystemUI", v -> runRoot("killall com.android.systemui", "Restarting SystemUI")));
         tc.addView(tapRow("Grant widget access", v -> runRoot("cmd appwidget grantbind --package com.android.systemui", "Done")));
         tc.addView(tapRow("Advanced", v -> showAdvanced()));
@@ -318,17 +269,31 @@ public class MainActivity extends Activity implements GridEditorView.Host {
     }
 
     // ---------- dialogs ----------
+    private AlertDialog.Builder dialog() { return new AlertDialog.Builder(this, ui.dialogTheme()); }
+
+    private static String themeName(int m) {
+        return m == Ui.LIGHT ? "Light" : m == Ui.DARK ? "Dark" : "System";
+    }
+
+    private void showTheme() {
+        final String[] names = {"System default", "Light", "Dark"};
+        dialog().setTitle("Theme").setSingleChoiceItems(names, Ui.mode(this), (dlg, which) -> {
+            Ui.setMode(this, which);
+            dlg.dismiss();
+            recreate();
+        }).setNegativeButton("Cancel", null).show();
+    }
+
     private void showLog() {
         String log = ConfigStore.readLog(this);
         if (log.isEmpty()) log = "(empty)\n\nThe SystemUI hook has not reported anything.\n"
                 + "Check: module enabled in LSPosed with scopes System UI and System Framework, phone rebooted, then lock and unlock once.";
-        TextView t = text(log, 11, TXT, false);
+        TextView t = text(log, 11, ui.txt, false);
         t.setTextIsSelectable(true);
         t.setPadding(dp(16), dp(8), dp(16), dp(8));
         ScrollView sv = new ScrollView(this);
         sv.addView(t);
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
-                .setTitle("SystemUI status").setView(sv)
+        dialog().setTitle("SystemUI status").setView(sv)
                 .setPositiveButton("Close", null)
                 .setNeutralButton("Clear", (x, w) -> ConfigStore.clearLog(this)).show();
     }
@@ -338,11 +303,11 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(8));
-        TextView hint = text("Set the minimum and maximum of every slider, and of rows and columns.", 12, SUB, false);
+        TextView hint = text("Set the minimum and maximum of every slider, and of rows and columns.", 12, ui.sub, false);
         hint.setPadding(0, 0, 0, dp(8));
         box.addView(hint);
         for (int i = 0; i < Limits.N; i++) {
-            box.addView(text(Limits.NAMES[i], 13, TXT, true));
+            box.addView(text(Limits.NAMES[i], 13, ui.txt, true));
             LinearLayout r = new LinearLayout(this);
             for (int k = 0; k < 2; k++) {
                 EditText e = new EditText(this);
@@ -357,7 +322,7 @@ public class MainActivity extends Activity implements GridEditorView.Host {
         }
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
-        final AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
+        final AlertDialog dlg = dialog()
                 .setTitle("Advanced: limits").setView(sv)
                 .setPositiveButton("Save", null).setNegativeButton("Cancel", null)
                 .setNeutralButton("Defaults", null).create();
